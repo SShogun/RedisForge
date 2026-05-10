@@ -25,11 +25,23 @@ type Redis struct {
 	Password string `env:"REDIS_PASSWORD" envDefault:""`
 	DB       int    `env:"REDIS_DB" envDefault:"0"`
 	PoolSize int    `env:"REDIS_POOL_SIZE" envDefault:"10"`
+
+	SentinelEnabled    bool     `env:"REDIS_SENTINEL_ENABLED"     envDefault:"false"`
+	SentinelMasterName string   `env:"REDIS_SENTINEL_MASTER_NAME" envDefault:"mymaster"`
+	SentinelAddrs      []string `env:"REDIS_SENTINEL_ADDRS"       envSeparator:","`
+
+	ClusterEnabled bool     `env:"REDIS_CLUSTER_ENABLED" envDefault:"false"`
+	ClusterAddrs   []string `env:"REDIS_CLUSTER_ADDRS"   envSeparator:","`
 }
 
 type App struct {
 	Env     string `env:"ENV" envDefault:"development"`
 	Version string `env:"SERVICE_VERSION" envDefault:"dev"`
+}
+
+// ! fix this
+func (cfg *Config) Validate() error {
+	return nil
 }
 
 func Load() (Config, error) {
