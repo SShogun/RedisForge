@@ -15,6 +15,7 @@ import (
 
 	"github.com/SShogun/redisforge/internal/config"
 	"github.com/SShogun/redisforge/internal/logging"
+	"github.com/SShogun/redisforge/internal/observability"
 	"github.com/SShogun/redisforge/internal/redisx"
 	"github.com/SShogun/redisforge/internal/repo"
 	"github.com/SShogun/redisforge/internal/workers"
@@ -28,9 +29,13 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("app.Run: load config: %w", err)
 	}
-
 	logger := logging.New(cfg.App)
 	ctx := context.Background()
+	otelShutdown, err := observability.InitTracer(ctx, "redisforge", cfg.App.Version)
+	if err != nil {
+		return fmt.Errorf("app.Run: init tracer: %w", err)
+	}
+	defer otelShutdown(context.Background())
 
 	// ── Redis ──────────────────────────────────────────────────────
 	redisClient, err := redisx.Open(ctx, cfg.Redis)
