@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SShogun/redisforge/internal/config"
+	"github.com/SShogun/redisforge/internal/handlers"
 	"github.com/SShogun/redisforge/internal/logging"
 	"github.com/SShogun/redisforge/internal/observability"
 	"github.com/SShogun/redisforge/internal/redisx"
@@ -82,36 +83,15 @@ func Run() error {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	// If the handlers package doesn't expose the expected constructor functions
-	// (HandleHealth, HandleCreateItem, etc.), fall back to simple inline
-	// handlers to keep the application buildable. Keep references to the
-	// stores to avoid unused variable compilation errors.
-	_ = cacheRepo
-	_ = streamStore
-	_ = bloomStore
-	_ = searchStore
-
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	r.Get("/healthz", handlers.HandleHealth())
 
 	r.Route("/v1/items", func(r chi.Router) {
-		r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "not implemented", http.StatusNotImplemented)
-		})
-		r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "not implemented", http.StatusNotImplemented)
-		})
-		r.Put("/{id}", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "not implemented", http.StatusNotImplemented)
-		})
-		r.Delete("/{id}", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "not implemented", http.StatusNotImplemented)
-		})
-		r.Get("/search", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "not implemented", http.StatusNotImplemented)
-		})
+		r.Post("/", handlers.HandleCreateItem(cacheRepo, streamStore, bloomStore))
+		r.Get("/search", handlers.HandleSearchItems(searchStore))
+		r.Get("/", handlers.HandleListItems(cacheRepo))
+		r.Get("/{id}", handlers.HandleGetItem(cacheRepo))
+		r.Put("/{id}", handlers.HandleUpdateItem(cacheRepo, streamStore))
+		r.Delete("/{id}", handlers.HandleDeleteItem(cacheRepo))
 	})
 
 	// ── HTTP Server ────────────────────────────────────────────────

@@ -27,8 +27,8 @@ func (p *PubSubClient) Publish(ctx context.Context, channel, message string) err
 	return nil
 }
 
-// Subscribe creates a sub to the given channels
+// Subscribe creates a subscription to the given channels.
 
 func (p *PubSubClient) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
-	return p.client.PSubscribe(ctx, channels...)
+	return p.client.Subscribe(ctx, channels...)
 }

@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/SShogun/redisforge/internal/domain"
 	env "github.com/caarlos0/env/v10"
 )
 
@@ -14,7 +16,7 @@ type Config struct {
 }
 
 type Server struct {
-	Port         int           `env:"SERVER_POST" envDefault:"8080"`
+	Port         int           `env:"SERVER_PORT" envDefault:"8080"`
 	ReadTimeout  time.Duration `env:"SERVER_READ_TIMEOUT" envDefault:"10s"`
 	WriteTimeout time.Duration `env:"SERVER_WRITE_TIMEOUT" envDefault:"10s"`
 	IdleTimeout  time.Duration `env:"SERVER_IDLE_TIMEOUT" envDefault:"120s"`
@@ -39,8 +41,30 @@ type App struct {
 	Version string `env:"SERVICE_VERSION" envDefault:"dev"`
 }
 
-// ! fix this
 func (cfg *Config) Validate() error {
+	if cfg.Server.Port < 1 || cfg.Server.Port > 65535 {
+		return fmt.Errorf("%w: invalid server port %d", domain.ErrInvalidInput, cfg.Server.Port)
+	}
+	if cfg.Redis.PoolSize < 1 {
+		return fmt.Errorf("%w: redis pool size must be positive", domain.ErrInvalidInput)
+	}
+	if cfg.Redis.SentinelEnabled && cfg.Redis.ClusterEnabled {
+		return fmt.Errorf("%w: sentinel and cluster cannot both be enabled", domain.ErrInvalidInput)
+	}
+	if cfg.Redis.SentinelEnabled {
+		if strings.TrimSpace(cfg.Redis.SentinelMasterName) == "" {
+			return fmt.Errorf("%w: redis sentinel master name is required", domain.ErrInvalidInput)
+		}
+		if len(cfg.Redis.SentinelAddrs) == 0 {
+			return fmt.Errorf("%w: redis sentinel addresses are required", domain.ErrInvalidInput)
+		}
+	}
+	if cfg.Redis.ClusterEnabled && len(cfg.Redis.ClusterAddrs) == 0 {
+		return fmt.Errorf("%w: redis cluster addresses are required", domain.ErrInvalidInput)
+	}
+	if !cfg.Redis.SentinelEnabled && !cfg.Redis.ClusterEnabled && strings.TrimSpace(cfg.Redis.Addr) == "" {
+		return fmt.Errorf("%w: redis address is required", domain.ErrInvalidInput)
+	}
 	return nil
 }
 

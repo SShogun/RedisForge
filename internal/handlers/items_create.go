@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SShogun/redisforge/internal/domain"
@@ -27,6 +29,10 @@ func HandleCreateItem(
 			IdempotencyKey string   `json:"idempotency_key"`
 		}
 		if err := readJSON(r, &input); err != nil {
+			writeError(w, r, domain.ErrInvalidInput)
+			return
+		}
+		if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Category) == "" {
 			writeError(w, r, domain.ErrInvalidInput)
 			return
 		}
@@ -63,6 +69,9 @@ func HandleCreateItem(
 
 		// Emit audit event to stream (async, non-blocking path)
 		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
 			event := domain.AuditEvent{
 				EventID:   uuid.New().String(),
 				ItemID:    created.ID,
@@ -70,7 +79,7 @@ func HandleCreateItem(
 				Timestamp: time.Now().UTC(),
 			}
 			eventJSON, _ := json.Marshal(event)
-			_, _ = stream.Append(r.Context(), "audit-events", map[string]interface{}{
+			_, _ = stream.Append(ctx, "audit-events", map[string]interface{}{
 				"event": string(eventJSON),
 			})
 		}()

@@ -38,11 +38,11 @@ func (b *BloomFilter) Add(ctx context.Context, key string) error {
 }
 
 func (b *BloomFilter) Exists(ctx context.Context, key string) (bool, error) {
-	res, err := b.client.Do(ctx, "BF.EXISTS", b.name, key).Int()
+	res, err := b.client.Do(ctx, "BF.EXISTS", b.name, key).Bool()
 	if err != nil {
 		return false, fmt.Errorf("BloomFilter.Exists: %w", err)
 	}
-	return res == 1, nil
+	return res, nil
 }
 
 // false -> key is deffo new

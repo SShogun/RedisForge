@@ -6,17 +6,22 @@ import (
 	"log/slog"
 
 	"github.com/SShogun/redisforge/internal/domain"
-	"github.com/SShogun/redisforge/internal/redisx"
 )
+
+type itemCache interface {
+	SetItem(context.Context, domain.Item) error
+	GetItem(context.Context, string) (domain.Item, error)
+	DeleteItem(context.Context, string) error
+}
 
 // CacheItemRepo decorates an ItemRepo with a RedisJSON cache.
 type CacheItemRepo struct {
 	fallback ItemRepo
-	cache    *redisx.JSONStore
+	cache    itemCache
 	logger   *slog.Logger
 }
 
-func NewCacheItemRepo(fallback ItemRepo, cache *redisx.JSONStore, logger *slog.Logger) *CacheItemRepo {
+func NewCacheItemRepo(fallback ItemRepo, cache itemCache, logger *slog.Logger) *CacheItemRepo {
 	return &CacheItemRepo{fallback: fallback, cache: cache, logger: logger}
 }
 
