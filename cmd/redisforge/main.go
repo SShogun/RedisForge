@@ -1,7 +1,13 @@
 package main
 
-import "fmt"
+import (
+	"log"
+
+	"github.com/SShogun/redisforge/internal/app"
+)
 
 func main() {
-	fmt.Println("redisforge starting")
+	if err := app.Run(); err != nil {
+		log.Fatalf("fatal: %v", err)
+	}
 }
