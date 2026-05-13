@@ -21,7 +21,7 @@ func NewPubSubClient(client redis.UniversalClient) *PubSubClient {
 // error returns only if redis errored, not if nobody is not listening
 
 func (p *PubSubClient) Publish(ctx context.Context, channel, message string) error {
-	if err := p.client.Publish(ctx, channel, message); err != nil {
+	if err := p.client.Publish(ctx, channel, message).Err(); err != nil {
 		return fmt.Errorf("PubSubClient.Publish: %w", err)
 	}
 	return nil
