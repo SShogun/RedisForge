@@ -10,7 +10,7 @@ RedisForge is a production-shaped Go service that teaches Redis architecture pat
 
 The codebase is **feature-complete**: all 15 build phases are implemented and tested. The project builds cleanly, tests pass with race detection, and the service runs against single-node, Sentinel HA, and Cluster topologies.
 
-The full implementation recipe lives in [docs/REDISFORGE_BUILD_GUIDE.md](docs/REDISFORGE_BUILD_GUIDE.md)—a file-by-file, decision-by-decision guide to every phase. Supporting docs include [docs/redis-decisions.md](docs/redis-decisions.md) (configuration justifications) and [docs/profiling-results.md](docs/profiling-results.md) (performance baseline for tuning).
+Supporting docs include [docs/redis-decisions.md](docs/redis-decisions.md) (configuration justifications) and [docs/profiling-results.md](docs/profiling-results.md) (performance baseline for tuning).
 
 ---
 
@@ -233,7 +233,6 @@ redisforge/
 │   │   └── docker-compose.yml     # Sentinel HA topology
 │   └── redis-cluster/             # (Future) Cluster topology
 ├── docs/
-│   ├── REDISFORGE_BUILD_GUIDE.md  # File-by-file implementation recipe
 │   ├── redis-decisions.md         # Bloom, RediSearch, Streams configuration choices
 │   └── profiling-results.md       # Performance baseline and tuning data
 ├── Makefile                       # run, build, test, lint, up, down
@@ -604,7 +603,6 @@ Documentation is organized by topic:
 
 | Document | Purpose |
 |---|---|
-| [REDISFORGE_BUILD_GUIDE.md](docs/REDISFORGE_BUILD_GUIDE.md) | File-by-file, phase-by-phase implementation recipe with code excerpts and justifications |
 | [redis-decisions.md](docs/redis-decisions.md) | Configuration choices: Bloom error rate, RediSearch schema, Streams MAXLEN, Sentinel vs Cluster |
 | [profiling-results.md](docs/profiling-results.md) | Performance baseline: SLOWLOG, LATENCY, MEMORY analysis (templates for your profiling data) |
 
