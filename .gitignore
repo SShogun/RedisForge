@@ -1,4 +1,7 @@
 docs/REDISFORGE_BUILD_GUIDE.md
 .env
 .env.example
-/docs
+docs/interview_questions.md
+docs/residforge_interview_answers.md
+
+docs/redisforge_interview_answers.md
