@@ -27,6 +27,8 @@ import (
 	"github.com/SShogun/redisforge/internal/workers"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Run is the application entry point. Returns non-nil error on fatal startup failure.
@@ -89,6 +91,12 @@ func Run() error {
 	r.Use(middleware.Timeout(30 * time.Second))
 
 	r.Get("/healthz", handlers.HandleHealth())
+
+	// root -> health for quick checks
+	r.Get("/", handlers.HandleHealth())
+
+	// Prometheus metrics endpoint
+	r.Handle("/metrics", promhttp.Handler())
 
 	r.Route("/v1/items", func(r chi.Router) {
 		r.Post("/", handlers.HandleCreateItem(cacheRepo, streamStore, bloomStore))
