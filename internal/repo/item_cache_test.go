@@ -159,3 +159,90 @@ func TestCacheItemRepo_Create_WritesThrough(t *testing.T) {
 		t.Fatalf("expected cache write-through, got %d set calls", cache.setCalls)
 	}
 }
+
+// Benchmarks: Cache hit vs miss performance
+
+// BenchmarkCacheItemRepo_GetByID_CacheHit measures performance when item is in cache.
+// This is the fast path: immediate return without fallback store access.
+func BenchmarkCacheItemRepo_GetByID_CacheHit(b *testing.B) {
+	ctx := context.Background()
+	item := domain.Item{ID: "bench-hit", Name: "Cached", Category: "perf", Score: 9.9}
+	cache := &fakeCache{items: map[string]domain.Item{item.ID: item}}
+	fallback := stubRepo{
+		getFn: func(context.Context, string) (domain.Item, error) {
+			b.Fatal("cache hit should not access fallback")
+			return domain.Item{}, nil
+		},
+		createFn: func(context.Context, domain.Item) (domain.Item, error) { return domain.Item{}, nil },
+		updateFn: func(context.Context, domain.Item) (domain.Item, error) { return domain.Item{}, nil },
+		deleteFn: func(context.Context, string) error { return nil },
+		listFn:   func(context.Context, int, int) ([]domain.Item, error) { return nil, nil },
+	}
+	repo := NewCacheItemRepo(fallback, cache, testLogger())
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = repo.GetByID(ctx, item.ID)
+	}
+}
+
+// BenchmarkCacheItemRepo_GetByID_CacheMiss measures performance on cache miss.
+// This requires fallback store lookup, which is slower than cache hit.
+func BenchmarkCacheItemRepo_GetByID_CacheMiss(b *testing.B) {
+	ctx := context.Background()
+	item := domain.Item{ID: "bench-miss", Name: "Fallback", Category: "perf", Score: 8.8}
+
+	// Seed fallback store but leave cache empty
+	fallback := NewMemoryItemRepo()
+	_, _ = fallback.Create(ctx, item)
+
+	cache := &fakeCache{getErr: domain.ErrNotFound}
+	repo := NewCacheItemRepo(fallback, cache, testLogger())
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = repo.GetByID(ctx, item.ID)
+	}
+}
+
+// BenchmarkCacheItemRepo_GetByID_BackfillPath measures cache miss with backfill.
+// This includes fallback lookup + cache write, the most expensive single path.
+func BenchmarkCacheItemRepo_GetByID_BackfillPath(b *testing.B) {
+	ctx := context.Background()
+	item := domain.Item{ID: "bench-backfill", Name: "ToCache", Category: "perf", Score: 7.7}
+
+	fallback := NewMemoryItemRepo()
+	_, _ = fallback.Create(ctx, item)
+
+	cache := &fakeCache{}
+	repo := NewCacheItemRepo(fallback, cache, testLogger())
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = repo.GetByID(ctx, item.ID)
+	}
+}
+
+// BenchmarkCacheItemRepo_GetByID_Contention measures cache hit under parallel access.
+// Simulates real-world load where multiple goroutines query the same popular item.
+func BenchmarkCacheItemRepo_GetByID_Contention(b *testing.B) {
+	ctx := context.Background()
+	item := domain.Item{ID: "bench-contention", Name: "Popular", Category: "perf", Score: 9.0}
+	cache := &fakeCache{items: map[string]domain.Item{item.ID: item}}
+	fallback := stubRepo{
+		getFn: func(context.Context, string) (domain.Item, error) {
+			return domain.Item{}, nil
+		},
+		createFn: func(context.Context, domain.Item) (domain.Item, error) { return domain.Item{}, nil },
+		updateFn: func(context.Context, domain.Item) (domain.Item, error) { return domain.Item{}, nil },
+		deleteFn: func(context.Context, string) error { return nil },
+		listFn:   func(context.Context, int, int) ([]domain.Item, error) { return nil, nil },
+	}
+	repo := NewCacheItemRepo(fallback, cache, testLogger())
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = repo.GetByID(ctx, item.ID)
+		}
+	})
+}

@@ -95,6 +95,15 @@ func (w *AuditWorker) claimLoop(ctx context.Context) {
 }
 
 func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) {
+	// Context propagation: check if context is already cancelled before processing
+	// This ensures graceful shutdown when the caller signals context.Done()
+	select {
+	case <-ctx.Done():
+		w.logger.Info("audit_worker: context cancelled, skipping process", "id", msg.ID())
+		return // Don't ACK yet; let it be reclaimed
+	default:
+	}
+
 	raw, ok := msg.Values()["event"].(string)
 	if !ok {
 		w.logger.Warn("audit_worker: missing event field", "id", msg.ID())

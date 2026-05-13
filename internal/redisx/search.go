@@ -10,6 +10,12 @@ import (
 
 const itemIndexName = "idx:items"
 
+// Hash-tag note for Cluster mode:
+// The RediSearch index is a singleton (not per-item) and spans the entire cluster.
+// Individual item keys use "item:{id}" format to ensure hash-tag discipline.
+// The index itself is synchronized across slots automatically by Redis Cluster.
+// No hash-tag needed for the index key.
+
 type SearchStore struct {
 	client redis.UniversalClient
 }

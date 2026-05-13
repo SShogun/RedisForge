@@ -12,6 +12,11 @@ type BloomFilter struct {
 	name   string
 }
 
+// NewBloomFilter returns a BloomFilter backed by the given client.
+// Hash-tag note for Cluster mode:
+// This is a singleton Bloom filter (not per-item), so hash-tag discipline does not apply.
+// Compare with itemKey() in json.go which uses {id} hash tags to ensure all per-item operations
+// land on the same slot. The Bloom filter spans the cluster and Redis handles synchronization.
 func NewBloomFilter(client redis.UniversalClient, name string) *BloomFilter {
 	return &BloomFilter{
 		client: client,

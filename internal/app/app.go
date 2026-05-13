@@ -2,6 +2,11 @@ package app
 
 // app.go owns the lifecycle of every subsystem:
 //   Open → Start workers → Serve HTTP → Shutdown sequence.
+//
+// Dependency injection: Currently manual (~100 lines) for clarity and visibility.
+// At production scale (50+ components), consider google/wire to auto-generate this:
+// https://github.com/google/wire
+// For now, explicit wiring makes every dependency relationship explicit.
 
 import (
 	"context"
