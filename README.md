@@ -1,6 +1,7 @@
 # RedisForge
 
 <p align="center">
+  <a href="https://github.com/SShogun/redisforge/actions/workflows/ci.yml"><img src="https://github.com/SShogun/redisforge/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go version" />
   <img src="https://img.shields.io/badge/Redis-Stack-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis Stack" />
   <img src="https://img.shields.io/badge/Focus-Redis%20Architecture-2E7D32?style=for-the-badge" alt="Focus" />
