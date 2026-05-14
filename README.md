@@ -472,9 +472,13 @@ cd redisforge
 # Start Redis Stack (single-node)
 make up
 
-# Run the application
+# Run the application (Starts the API, Redis Stack, Prometheus, and Grafana)
 make run
 # Output: "redisforge listening" on port 8080
+
+# Generate traffic and see the benchmarks!
+.\scripts\benchmark.ps1
+# Then open http://localhost:3000 to view your Grafana metrics!
 
 # In another terminal: create an Item
 curl -X POST http://localhost:8080/v1/items \
@@ -571,11 +575,6 @@ All phases are complete. Here's the project structure:
 | RF-14 | Observability | OpenTelemetry tracing setup |
 | RF-15 | Profiling | SLOWLOG, LATENCY, MEMORY analysis |
 
-Each phase has a corresponding section in [docs/REDISFORGE_BUILD_GUIDE.md](docs/REDISFORGE_BUILD_GUIDE.md) with implementation code, tests, and verification steps.
-
-### Phase 4 — HTTP and app wiring
-
-- HTTP handlers
 Each phase has a corresponding section in [docs/REDISFORGE_BUILD_GUIDE.md](docs/REDISFORGE_BUILD_GUIDE.md) with implementation code, tests, and verification steps.
 
 ---
