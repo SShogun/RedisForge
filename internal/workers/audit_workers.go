@@ -3,11 +3,13 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/SShogun/redisforge/internal/domain"
+	"github.com/SShogun/redisforge/internal/observability"
 	"github.com/SShogun/redisforge/internal/redisx"
 )
 
@@ -95,11 +97,23 @@ func (w *AuditWorker) claimLoop(ctx context.Context) {
 }
 
 func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) {
+	start := time.Now()
+	var processErr error
+	action := "unknown"
+
+	defer func() {
+		// Only record if we didn't just skip due to context cancellation
+		if processErr != context.Canceled {
+			observability.RecordStreamProcessing(start, processErr, action)
+		}
+	}()
+
 	// Context propagation: check if context is already cancelled before processing
 	// This ensures graceful shutdown when the caller signals context.Done()
 	select {
 	case <-ctx.Done():
 		w.logger.Info("audit_worker: context cancelled, skipping process", "id", msg.ID())
+		processErr = context.Canceled
 		return // Don't ACK yet; let it be reclaimed
 	default:
 	}
@@ -109,6 +123,7 @@ func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) {
 		w.logger.Warn("audit_worker: missing event field", "id", msg.ID())
 		// need to ACK otherwise process will requeue forever
 		_ = msg.Ack(ctx)
+		processErr = fmt.Errorf("missing event field")
 		return
 	}
 
@@ -116,8 +131,10 @@ func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) {
 	if err := json.Unmarshal([]byte(raw), &event); err != nil {
 		w.logger.Error("audit_worker: unmarshal failed", "id", msg.ID(), "err", err)
 		_ = msg.Ack(ctx) // dead-letter
+		processErr = err
 		return
 	}
+	action = event.Action
 
 	// just log
 	w.logger.Info("audit_worker: processed event",

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/SShogun/redisforge/internal/observability"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -56,7 +58,12 @@ type SearchResult struct {
 //   "@score:[5 10]"            → numeric range
 //   "widget @category:{tools}" → combined
 
-func (s *SearchStore) Search(ctx context.Context, query string, offset, limit int) ([]SearchResult, int64, error) {
+func (s *SearchStore) Search(ctx context.Context, query string, offset, limit int) (results []SearchResult, total int64, err error) {
+	start := time.Now()
+	defer func() {
+		observability.RecordSearchLatency(start, err)
+	}()
+
 	res, err := s.client.Do(ctx,
 		"FT.SEARCH", itemIndexName, query,
 		"LIMIT", offset, limit,
@@ -69,8 +76,8 @@ func (s *SearchStore) Search(ctx context.Context, query string, offset, limit in
 		return nil, 0, nil
 	}
 
-	total, _ := res[0].(int64)
-	var results []SearchResult
+	total, _ = res[0].(int64)
+	results = make([]SearchResult, 0)
 
 	for i := 1; i < len(res); i += 2 {
 		key, _ := res[i].(string)

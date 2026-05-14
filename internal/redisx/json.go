@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/SShogun/redisforge/internal/domain"
+	"github.com/SShogun/redisforge/internal/observability"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,7 +26,12 @@ func itemKey(id string) string {
 }
 
 // converts JSON.SET item:{123}
-func (s *JSONStore) SetItem(ctx context.Context, item domain.Item) error {
+func (s *JSONStore) SetItem(ctx context.Context, item domain.Item) (err error) {
+	start := time.Now()
+	defer func() {
+		observability.RecordJSONSetLatency(start, err)
+	}()
+
 	data, err := json.Marshal(item)
 	if err != nil {
 		return fmt.Errorf("JSONStore.SetItem: marshal: %w", err)
@@ -35,7 +42,15 @@ func (s *JSONStore) SetItem(ctx context.Context, item domain.Item) error {
 	}
 	return nil
 }
-func (s *JSONStore) GetItem(ctx context.Context, id string) (domain.Item, error) {
+func (s *JSONStore) GetItem(ctx context.Context, id string) (item domain.Item, err error) {
+	start := time.Now()
+	defer func() {
+		// Only record latency if it's not a cache miss, or if we want to record all?
+		// Actually, Redis.Nil is technically a successful operation (it took time to find out it's missing).
+		// We'll record it.
+		observability.RecordJSONGetLatency(start, err)
+	}()
+
 	raw, err := s.client.Do(ctx, "JSON.GET", itemKey(id), "$").Text()
 	// raw gets returned as an json array then converted into string using .Text() function
 	if err == redis.Nil {

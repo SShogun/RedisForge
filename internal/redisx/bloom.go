@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/SShogun/redisforge/internal/observability"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -44,6 +45,9 @@ func (b *BloomFilter) Add(ctx context.Context, key string) error {
 
 func (b *BloomFilter) Exists(ctx context.Context, key string) (bool, error) {
 	res, err := b.client.Do(ctx, "BF.EXISTS", b.name, key).Bool()
+	if err == nil {
+		observability.RecordBloomCheck(res)
+	}
 	if err != nil {
 		return false, fmt.Errorf("BloomFilter.Exists: %w", err)
 	}

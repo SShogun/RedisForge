@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/SShogun/redisforge/internal/domain"
+	"github.com/SShogun/redisforge/internal/observability"
 )
 
 type itemCache interface {
@@ -42,6 +43,7 @@ func (r *CacheItemRepo) GetByID(ctx context.Context, id string) (domain.Item, er
 	// Cache-first
 	item, err := r.cache.GetItem(ctx, id)
 	if err == nil {
+		observability.RecordCacheHit()
 		return item, nil
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -50,6 +52,7 @@ func (r *CacheItemRepo) GetByID(ctx context.Context, id string) (domain.Item, er
 	}
 
 	// Cache miss — hit the fallback
+	observability.RecordCacheMiss()
 	item, err = r.fallback.GetByID(ctx, id)
 	if err != nil {
 		return domain.Item{}, err
