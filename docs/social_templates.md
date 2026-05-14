@@ -1,36 +1,96 @@
-Social post templates — LinkedIn & X
+# Social Templates
 
-Usage: paste and edit the narrative lines you mentioned you'll prepare. Keep hashtags short.
+Use these when sharing RedisForge publicly. Keep the post specific, technical, and easy to verify.
 
-X (Twitter) thread template (short, punchy)
+## X Thread
 
-1/4 — Launched a tiny demo of RedisForge: fast JSON storage, RediSearch, Bloom filters, Streams & Prometheus metrics. Quick walkthrough: 
+```text
+1/ Redis is deeper than SET/GET.
 
-2/4 — Start the demo, create an item, then fetch it. Watch `cache_hits_total` tick up.
+I built RedisForge to make the important Redis patterns visible in one small Go service:
 
-3/4 — Run a quick search and show results (RediSearch). Show stream audit logs processing events.
+- RedisJSON
+- RedisBloom
+- RediSearch
+- Streams
+- Pub/Sub
+- Sentinel-ready clients
+- metrics + tests
 
-4/4 — Repo: <link to repo> • Demo script: `docs/demo_workflow.md` • GIF: attached
+2/ The domain is intentionally tiny: Items.
 
-LinkedIn post template (longer form)
+That keeps the real topic visible:
 
-Header: Demonstrating RedisForge — fast JSON + search + observability in under 2 minutes
+- cache-aside reads
+- idempotency checks
+- JSON document indexing
+- durable audit events
+- topology-aware Redis clients
 
-Body:
-- Why I built it: (your narrative)
-- What it shows: JSON storage with RedisJSON, full-text search (RediSearch), safety via Bloom filters, audit via Streams, and Prometheus metrics for ops visibility.
-- What you’ll see in the demo: starting the Redis stack, creating an item, showing cache hit/miss, viewing `/metrics`, and a short benchmark comparing cache hit vs miss.
+3/ The part I care about most:
 
-Call-to-action:
-- Try the repo: <repo link>
-- GIF: attached (30s)
-- Full instructions: `docs/demo_workflow.md`
+The repo is also a Redis revision guide.
 
-Hashtags:
-#Redis #GoLang #Observability #DevTools #OpenSource
+When Redis concepts get messy, I can reopen the implementation docs and walk through the system from HTTP handler to Redis module.
 
-Notes:
-- For X/Twitter, keep each tweet <280 chars and attach a short GIF.
-- For LinkedIn, include a 1–2 paragraph narrative and a screenshot + GIF.
+4/ Start here:
 
-If you paste your narrative text, I will inject it into these templates and produce ready-to-post copies (with optional shortened URLs).
+README: <repo link>
+Docs path: docs/README.md
+Implementation notes: docs/implementation/redis-patterns.md
+
+If you are learning Redis for backend/system design, this should be useful.
+```
+
+## LinkedIn Post
+
+```text
+Redis is one of those tools that looks simple until you actually need to design with it.
+
+I built RedisForge as a small production-shaped Go service for revising Redis architecture patterns in one place.
+
+It covers:
+
+- RedisJSON for document caching
+- RedisBloom for idempotency pre-checks
+- RediSearch for full-text and faceted search
+- Redis Streams for durable audit processing
+- Pub/Sub for ephemeral notifications
+- Sentinel/Cluster-ready client wiring
+- Prometheus metrics, OpenTelemetry hooks, and integration tests
+
+The domain is intentionally small: Items.
+
+That keeps the focus on Redis decisions instead of hiding everything behind business logic. The repo also has docs for implementation notes, Redis tradeoffs, profiling, demos, and project progress.
+
+Repo: <repo link>
+Start with: docs/README.md
+```
+
+## Short Launch Caption
+
+```text
+Built RedisForge: a Go + Redis Stack project for learning Redis architecture beyond SET/GET.
+
+It covers RedisJSON, Bloom filters, RediSearch, Streams, Pub/Sub, Sentinel-ready clients, metrics, tests, and implementation docs.
+
+Repo: <repo link>
+```
+
+## Hashtags
+
+```text
+#Redis #GoLang #BackendEngineering #OpenSource #SystemDesign
+```
+
+## Content Calendar Ideas
+
+| Post | Topic | Asset |
+| --- | --- | --- |
+| 1 | RedisForge launch | README screenshot + terminal demo |
+| 2 | Cache-aside pattern | `internal/repo/item_cache.go` snippet |
+| 3 | Redis Streams recovery | `XAUTOCLAIM` explanation |
+| 4 | RediSearch over JSON | search query example |
+| 5 | Bloom filter idempotency | false-positive tradeoff note |
+| 6 | Sentinel vs Cluster | docs comparison table |
+

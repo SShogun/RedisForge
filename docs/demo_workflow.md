@@ -1,75 +1,101 @@
-Demo workflow — RedisForge
+# RedisForge Demo Workflow
 
-Goal
-- Produce a short, repeatable demo you can record and post on LinkedIn and X showing RedisForge features: item create/search, cache hit/miss, streams/audit, and observability metrics.
+Goal: produce a short, repeatable demo that shows RedisForge as a useful Redis learning project, not just another CRUD API.
 
-Prerequisites
-- Windows with Docker Desktop running
-- Git, Go 1.25+, PowerShell
-- From repo root: Docker Compose files in `deployments/` are used to bring up Redis stack
+## Demo Story
 
-Quick steps (1–2 minute demo)
-1. Start Redis stack (Sentinel/Cluster if desired):
+In 60 to 90 seconds, show this arc:
 
-```powershell
-cd .\deployments\
-# choose the compose you want (simple or sentinel/cluster)
-docker compose up -d
+```text
+start stack
+  -> create item
+  -> fetch item through cache-aside path
+  -> search with RediSearch
+  -> show metrics or logs
+  -> point viewers to docs/README.md
 ```
 
-2. Build and run RedisForge (local):
+## Prerequisites
+
+- Docker Desktop running
+- Go 1.25+
+- PowerShell on Windows
+- Repo cloned locally
+
+## Quick Demo
+
+Start the app, Redis Stack, Prometheus, and Grafana:
 
 ```powershell
-cd "${PWD}"
-go build -o bin/redisforge ./cmd/redisforge
-# run in one terminal
-.
-# start with default config (use env or flags as needed)
-./bin/redisforge
+.\make.ps1 up
 ```
 
-3. Exercise the API (create, get, search):
+The API is now available on `http://localhost:8080`.
+
+Create an item:
 
 ```powershell
-# create an item
-curl -X POST http://localhost:8080/items -H "Content-Type: application/json" -d '{"id":"demo-1","name":"Demo Item","category":"demo","tags":["social","demo"]}'
-
-# get item (cache hit)
-curl http://localhost:8080/items/demo-1
-
-# search (RediSearch)
-curl 'http://localhost:8080/items/search?q=Demo'
+Invoke-RestMethod -Uri "http://localhost:8080/v1/items" -Method Post -ContentType "application/json" -Body '{
+  "name": "Redis Streams Notebook",
+  "category": "learning",
+  "score": 9.7,
+  "tags": ["redis", "streams", "search"],
+  "idempotency_key": "demo-001"
+}'
 ```
 
-4. Show observability (Prometheus metrics) and tracing
-- Open `http://localhost:8080/metrics` to show Prometheus metrics (cache_hit/miss, redis latencies)
-- If using Jaeger/OTel, show traces in the tracing UI (optional)
-
-5. Demonstrate Streams/Audit (if enabled)
-- Trigger an operation that writes to streams, then show consumer processing logs
-
-6. Run a benchmark (optional)
+Fetch items:
 
 ```powershell
-# run repository benchmarks (cache hit vs miss)
-go test -bench=BenchmarkCacheItemRepo ./internal/repo -run=^$
+Invoke-RestMethod "http://localhost:8080/v1/items"
 ```
 
-Recording tips
-- Keep the recording to 60–90 seconds for X/Twitter; 2–3 minutes for LinkedIn
-- Start with a one-line caption on the editor showing the repo and goal
-- Show terminal commands and quick results (curl output, metrics page, a log line for stream processing)
-- Call out one metric (cache_hits_total) and explain the improvement
+Search:
 
-Assets to attach in post
-- Short GIF (30s) showing: start server → create item → get item (cache hit) → open /metrics
-- 1–2 screenshots: metrics dashboard and search result
-- Link to repo and short instructions in thread or comment
+```powershell
+Invoke-RestMethod "http://localhost:8080/v1/items/search?q=Redis"
+```
 
-Customization
-- Replace endpoints/ports if your config differs
-- Use `deployments/redis-sentinel/` compose for high-availability demo
-- Use `--record` flag on terminal recording tools (e.g., ShareX, Peek, OBS) to create GIFs
+Show metrics:
 
-Next steps
-- Provide the narrative text you want shown on X/LinkedIn and I’ll produce ready-to-post templates and a short caption pack.
+```powershell
+Invoke-RestMethod "http://localhost:8080/metrics"
+```
+
+Run tests:
+
+```powershell
+.\make.ps1 test
+```
+
+Stop the stack:
+
+```powershell
+.\make.ps1 down
+```
+
+## What To Show On Screen
+
+Use four quick cuts:
+
+1. README opening: show the purpose and docs table.
+2. Code: open `internal/redisx/streams.go` or `internal/repo/item_cache.go`.
+3. Terminal: create/search item successfully.
+4. Docs: open `docs/implementation/redis-patterns.md`.
+
+## Recording Tips
+
+- Keep the first demo under 90 seconds.
+- Use a large terminal font.
+- Avoid explaining every Redis module in one video.
+- Pick one hook per video: Streams recovery, Bloom idempotency, RediSearch, or cache-aside.
+- End by showing `docs/README.md`, because that is the repo's learning path.
+
+## Demo Hooks
+
+| Hook | Angle |
+| --- | --- |
+| "Redis beyond SET/GET" | Show JSON, Search, Bloom, and Streams in one small service |
+| "Cache-aside without hand-waving" | Show repository code and then the API call |
+| "Streams vs Pub/Sub" | Explain durable audit events vs ephemeral notifications |
+| "Redis as architecture practice" | Show code, docs, tests, and metrics together |
