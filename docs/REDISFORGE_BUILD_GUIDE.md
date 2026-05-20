@@ -66,3 +66,17 @@ This document serves as a historical record of how RedisForge was built, phase b
 ## Phase 15: Profiling & Load Testing
 - Developed `scripts/benchmark.ps1` to act as a traffic generator.
 - Used the benchmark script to populate Grafana and prove the sub-millisecond efficiency of RedisJSON and RediSearch.
+- Documented full profiling results in `docs/profiling-results.md`: SLOWLOG, LATENCY, MEMORY analysis, JSON vs HASH comparison, and bigkeys report.
+
+## Phase 16: Cluster Demo
+- Created `deployments/redis-cluster/` with a 6-node Docker Compose (3 masters, 3 replicas).
+- Documented hash-slot distribution, hash-tag co-location, and failover experimentation.
+- The Go app connects via `REDIS_CLUSTER_ENABLED=true` and seed addresses — no code changes needed.
+- Note: Redis Stack modules (JSON, Bloom, Search) do not support native Cluster; this demo uses plain `redis:7-alpine`.
+
+## Phase 17: Polish & Documentation
+- Replaced all text-based architecture diagrams with Mermaid sequence diagrams in `architecture.md` and `redis-patterns.md`.
+- Added `stream_pending_count` Prometheus gauge and `GetPendingCount` via `XPENDING`.
+- Created handler-level idempotency integration test (`items_create_test.go`) using Testcontainers.
+- Built a Feature Coverage Matrix in `docs/README.md` auditing code, test, and doc status for every feature.
+- Updated interview answers to reflect current project state.

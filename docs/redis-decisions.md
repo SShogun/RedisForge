@@ -225,9 +225,10 @@ redis-cli XRANGE audit-events - + COUNT 1
 - All data on one master — suitable if incident volume < 500GB.
 - Run: `docker compose -f deployments/redis-sentinel/docker-compose.yml up -d`
 
-**Cluster (Future):**
+**Cluster (Phase RF-16):**
 - Hash-tagged multi-key ops: `{user:1001}:profile`, `{user:1001}:settings` land on same slot.
-- Horizontal scale: 3-node cluster can store ~1TB with replicas.
+- Horizontal scale: 3-node cluster (6 containers with replicas) can store ~1TB.
+- Demo available: see [`deployments/redis-cluster/README.md`](../deployments/redis-cluster/README.md) for setup and hash-slot exploration.
 - Run: `docker compose -f deployments/redis-cluster/docker-compose.yml up -d`
 
 ### ILA Topology Recommendation

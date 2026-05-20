@@ -86,11 +86,19 @@ func (w *AuditWorker) claimLoop(ctx context.Context) {
 				w.consumerName, batchSize)
 			if err != nil {
 				w.logger.Warn("audit_worker: ClaimStale error", "err", err)
-				continue
+			} else {
+				for _, msg := range stale {
+					w.logger.Info("audit_worker: reclaimed stale message", "id", msg.ID())
+					w.process(ctx, msg)
+				}
 			}
-			for _, msg := range stale {
-				w.logger.Info("audit_worker: reclaimed stale message", "id", msg.ID())
-				w.process(ctx, msg)
+
+			// Update pending count metric
+			pending, err := w.stream.GetPendingCount(ctx, auditStream, auditGroup)
+			if err == nil {
+				observability.SetStreamPendingCount(auditStream, auditGroup, float64(pending))
+			} else {
+				w.logger.Warn("audit_worker: failed to get pending count", "err", err)
 			}
 		}
 	}

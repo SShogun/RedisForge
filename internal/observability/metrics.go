@@ -84,6 +84,15 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	// StreamPendingCount gauges the number of unacknowledged events in the audit stream.
+	StreamPendingCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "stream_pending_count",
+			Help: "Current number of pending (unacknowledged) messages in the stream",
+		},
+		[]string{"stream", "group"},
+	)
 )
 
 // RecordJSONSetLatency records the latency of a JSON.SET operation.
@@ -144,4 +153,9 @@ func RecordSearchLatency(start time.Time, err error) {
 		status = "error"
 	}
 	RediSearchLatency.WithLabelValues(status).Observe(float64(elapsed))
+}
+
+// SetStreamPendingCount updates the gauge for pending stream messages.
+func SetStreamPendingCount(stream, group string, count float64) {
+	StreamPendingCount.WithLabelValues(stream, group).Set(count)
 }

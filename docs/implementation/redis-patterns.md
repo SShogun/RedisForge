@@ -66,12 +66,30 @@ Where: `internal/redisx/streams.go`, `internal/workers/audit_workers.go`
 
 RedisForge uses Streams as a durable audit log:
 
-```text
-XADD audit-events * event ...
-XGROUP CREATE audit-events audit-processors $
-XREADGROUP GROUP audit-processors consumer-1 ...
-XACK audit-events audit-processors message-id
-XAUTOCLAIM audit-events audit-processors consumer-1 30000 0-0
+```mermaid
+sequenceDiagram
+    participant API as Item Handlers (Producer)
+    participant Redis as Redis Stream (audit-events)
+    participant Worker as Background Audit Worker
+    
+    API->>Redis: XADD (append event)
+    Note over Redis: Trims stream approx 100k
+    
+    loop Every 500ms
+        Worker->>Redis: XREADGROUP (block 2s)
+        alt New Messages
+            Redis-->>Worker: Return Events
+            Worker->>Worker: Process Event
+            Worker->>Redis: XACK (acknowledge)
+        end
+    end
+    
+    loop Every 5s
+        Worker->>Redis: XAUTOCLAIM (idle > 30s)
+        Redis-->>Worker: Return Stale Events
+        Worker->>Worker: Process Stale Event
+        Worker->>Redis: XACK (acknowledge)
+    end
 ```
 
 Why it matters:
@@ -107,15 +125,35 @@ Where: `internal/repo/item_cache.go`
 
 Pattern:
 
-```text
-read:
-  try Redis
-  -> on miss, read fallback
-  -> backfill Redis
-
-write:
-  write fallback
-  -> update or invalidate Redis
+```mermaid
+sequenceDiagram
+    participant Client
+    participant App
+    participant Redis
+    participant DB as Fallback Store
+    
+    %% Read Flow
+    Note over Client, DB: Read Path
+    Client->>App: GET /v1/items/{id}
+    App->>Redis: JSON.GET item:{id}
+    alt Cache Hit
+        Redis-->>App: Return JSON
+        App-->>Client: 200 OK
+    else Cache Miss
+        Redis-->>App: nil
+        App->>DB: GetByID(id)
+        DB-->>App: Return Item
+        App->>Redis: JSON.SET item:{id}
+        App-->>Client: 200 OK
+    end
+    
+    %% Write Flow
+    Note over Client, DB: Write Path
+    Client->>App: PUT /v1/items/{id}
+    App->>DB: Update(item)
+    DB-->>App: Success
+    App->>Redis: DEL item:{id} (Invalidate)
+    App-->>Client: 200 OK
 ```
 
 Why it matters:
@@ -144,14 +182,18 @@ Where: `internal/redisx/client.go`
 
 Cluster solves horizontal scale by distributing 16,384 hash slots across masters.
 
-Key lesson:
+Key lesson (Hash-Tags):
+
+When running in Cluster mode, multi-key operations (like a transaction, or a pipeline operating on different keys) will fail if the keys belong to different hash slots on different nodes. 
+
+To solve this, Redis uses **hash tags**. If a key contains a substring enclosed by `{` and `}`, only that substring is hashed to determine the slot.
 
 ```text
-item:{123}:json
-item:{123}:audit
+item:{123}:json  --> hashes "123" --> Slot 12182
+item:{123}:audit --> hashes "123" --> Slot 12182
 ```
 
-The `{123}` hash tag forces related keys into the same slot, which matters for multi-key operations.
+Because both keys hash to the same slot, they are guaranteed to live on the same physical master node, making multi-key operations safe.
 
 Revision note: Cluster changes how you think about key design. Multi-key operations need keys in the same hash slot.
 

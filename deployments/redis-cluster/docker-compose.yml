@@ -1,0 +1,97 @@
+# Redis Cluster Demo — 6 nodes (3 masters, 3 replicas)
+#
+# This compose file creates a minimal Redis Cluster for learning purposes.
+# It does NOT use redis-stack (no RedisJSON/Bloom/Search modules in cluster mode),
+# because Redis Stack modules do not support native Cluster yet.
+#
+# What you learn here:
+#   - How 16,384 hash slots are distributed across masters
+#   - How hash-tags ({key}) force co-location
+#   - How the go-redis ClusterClient routes commands
+#   - How replica promotion works when a master dies
+#
+# Usage:
+#   cd deployments/redis-cluster
+#   docker compose up -d
+#   # Wait ~5 seconds for nodes to start, then form the cluster:
+#   docker compose exec redis-node-1 redis-cli --cluster create \
+#     redis-node-1:6379 redis-node-2:6379 redis-node-3:6379 \
+#     redis-node-4:6379 redis-node-5:6379 redis-node-6:6379 \
+#     --cluster-replicas 1 --cluster-yes
+#
+# Then verify:
+#   docker compose exec redis-node-1 redis-cli cluster info
+#   docker compose exec redis-node-1 redis-cli cluster nodes
+
+services:
+  redis-node-1:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --port 6379
+        --cluster-enabled yes
+        --cluster-config-file nodes.conf
+        --cluster-node-timeout 5000
+        --appendonly yes
+    ports:
+      - "7001:6379"
+
+  redis-node-2:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --port 6379
+        --cluster-enabled yes
+        --cluster-config-file nodes.conf
+        --cluster-node-timeout 5000
+        --appendonly yes
+    ports:
+      - "7002:6379"
+
+  redis-node-3:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --port 6379
+        --cluster-enabled yes
+        --cluster-config-file nodes.conf
+        --cluster-node-timeout 5000
+        --appendonly yes
+    ports:
+      - "7003:6379"
+
+  redis-node-4:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --port 6379
+        --cluster-enabled yes
+        --cluster-config-file nodes.conf
+        --cluster-node-timeout 5000
+        --appendonly yes
+    ports:
+      - "7004:6379"
+
+  redis-node-5:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --port 6379
+        --cluster-enabled yes
+        --cluster-config-file nodes.conf
+        --cluster-node-timeout 5000
+        --appendonly yes
+    ports:
+      - "7005:6379"
+
+  redis-node-6:
+    image: redis:7-alpine
+    command: >
+      redis-server
+        --port 6379
+        --cluster-enabled yes
+        --cluster-config-file nodes.conf
+        --cluster-node-timeout 5000
+        --appendonly yes
+    ports:
+      - "7006:6379"

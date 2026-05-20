@@ -38,6 +38,16 @@ chore: refresh demo workflow for windows
 - Ran load generation benchmarks using `scripts/benchmark.ps1`.
 - Populated `docs/profiling-results.md` and `docs/redis-decisions.md` with real metrics (p50/p99 latency, JSON vs HASH memory comparison).
 - Verified JSON overhead (~73%) is justified by the performance gains in partial updates and searching.
+- Added Mermaid sequence diagrams for Cache-Aside and Streams flows in `docs/implementation/redis-patterns.md`.
+- Added `stream_pending_count` Prometheus gauge metric and `GetPendingCount` method.
+- Created `internal/handlers/items_create_test.go` — handler-level idempotency integration test using Testcontainers.
+- Expanded Cluster hash-tag documentation with concrete slot-mapping examples.
+- Created `deployments/redis-cluster/` — full 6-node (3 master + 3 replica) Cluster demo with README.
+- Replaced all text-based architecture flows with Mermaid diagrams in `docs/implementation/architecture.md`.
+- Added Feature Coverage Matrix to `docs/README.md` — audits code/test/doc status for every feature.
+- Updated `docs/REDISFORGE_BUILD_GUIDE.md` with Phase 16 (Cluster) and Phase 17 (Polish).
+- Refreshed `docs/redisforge_interview_answers.md` to reflect current project state (all features implemented).
+- Updated `docs/README.md` reading order and intent table with interview guides and cluster demo.
 
 ### 2026-05-14
 
@@ -48,9 +58,10 @@ chore: refresh demo workflow for windows
 
 ## Next Good Commits
 
-- `docs: add diagrams for streams and cache-aside flow`
-- `test: add handler-level idempotency coverage`
+- `test: add RediSearch integration test`
+- `test: add Streams consumer group integration test`
+- `test: add Pub/Sub integration test`
 - `perf: capture benchmark output after cache warmup`
-- `docs: add cluster hash-tag examples from code`
-- `feat: expose stream pending count metric`
+- `docs: add screenshots or terminal recordings for demo`
+- `chore: record a 60-second demo video`
 

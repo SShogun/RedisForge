@@ -137,3 +137,12 @@ func (s *StreamClient) ClaimStale(
 	}
 	return msgs, nextStartID, nil
 }
+
+// GetPendingCount returns the total number of pending messages for a consumer group.
+func (s *StreamClient) GetPendingCount(ctx context.Context, stream, group string) (int64, error) {
+	pending, err := s.client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		return 0, fmt.Errorf("StreamClient.GetPendingCount: %w", err)
+	}
+	return pending.Count, nil
+}

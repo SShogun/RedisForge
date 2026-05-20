@@ -36,28 +36,31 @@ If Redis feels messy, this repo is meant to be the place you reopen and revise f
 
 ## Architecture At A Glance
 
-```text
-HTTP API
-  -> chi middleware
-  -> item handlers
-  -> cache-aside repository
-  -> RedisJSON cache
-  -> in-memory fallback store
-
-Writes also emit:
-  -> Redis Streams audit event
-  -> background audit worker with consumer groups
-
-Search uses:
-  -> RediSearch index over RedisJSON documents
-
-Idempotency uses:
-  -> RedisBloom pre-check before create
-
-Operations expose:
-  -> /healthz
-  -> /metrics
-  -> OpenTelemetry tracing hooks
+```mermaid
+graph TD
+    Client([Client]) --> API[HTTP API]
+    API --> Middleware[chi middleware]
+    Middleware --> Handlers[Item Handlers]
+    
+    subgraph Data Flow
+        Handlers --> Repo[Cache-Aside Repository]
+        Repo --> RedisJSON[(RedisJSON Cache)]
+        Repo -. "Fallback" .-> InMem[(In-Memory Store)]
+    end
+    
+    subgraph Redis Modules
+        Handlers -- "Idempotency Check" --> RedisBloom[(RedisBloom)]
+        Handlers -- "Emit Audit Event" --> Streams[(Redis Streams)]
+        Handlers -- "Search Query" --> RediSearch[(RediSearch)]
+        RediSearch -. "Indexes" .-> RedisJSON
+    end
+    
+    Streams --> Worker[Background Audit Worker]
+    
+    subgraph Observability
+        API -.-> Metrics[/healthz & /metrics]
+        API -.-> OTel[OpenTelemetry Tracing]
+    end
 ```
 
 The important design choice: the domain stays tiny so Redis remains the main thing you are studying.
@@ -94,7 +97,8 @@ redisforge/
 |   |-- docker-compose.yml       # app + Redis Stack + monitoring stack
 |   |-- prometheus/              # Prometheus config
 |   |-- grafana/                 # Grafana provisioning and dashboards
-|   `-- redis-sentinel/          # Sentinel HA demo topology
+|   |-- redis-sentinel/          # Sentinel HA demo topology
+|   `-- redis-cluster/           # 6-node Cluster horizontal-scale demo
 |-- docs/
 |   |-- implementation/          # architecture and Redis pattern notes
 |   |-- README.md                # docs index and learning path
