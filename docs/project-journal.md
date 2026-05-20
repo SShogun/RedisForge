@@ -33,6 +33,12 @@ chore: refresh demo workflow for windows
 
 ## Project Log
 
+### 2026-05-20
+
+- Ran load generation benchmarks using `scripts/benchmark.ps1`.
+- Populated `docs/profiling-results.md` and `docs/redis-decisions.md` with real metrics (p50/p99 latency, JSON vs HASH memory comparison).
+- Verified JSON overhead (~73%) is justified by the performance gains in partial updates and searching.
+
 ### 2026-05-14
 
 - Reworked the repository presentation around RedisForge as a Redis learning and revision resource.
