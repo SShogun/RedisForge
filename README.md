@@ -58,7 +58,7 @@ graph TD
     Streams --> Worker[Background Audit Worker]
     
     subgraph Observability
-        API -.-> Metrics[/healthz & /metrics]
+        API -.-> Metrics["/healthz and /metrics"]
         API -.-> OTel[OpenTelemetry Tracing]
     end
 ```
