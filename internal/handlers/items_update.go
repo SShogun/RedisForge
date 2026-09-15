@@ -1,20 +1,18 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/SShogun/redisforge/internal/audit"
 	"github.com/SShogun/redisforge/internal/domain"
-	"github.com/SShogun/redisforge/internal/redisx"
 	"github.com/SShogun/redisforge/internal/repo"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
-func HandleUpdateItem(items repo.ItemRepo, stream *redisx.StreamClient) http.HandlerFunc {
+func HandleUpdateItem(items repo.ItemRepo, auditEmitter *audit.Emitter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSpace(chi.URLParam(r, "id"))
 		if id == "" {
@@ -79,21 +77,12 @@ func HandleUpdateItem(items repo.ItemRepo, stream *redisx.StreamClient) http.Han
 			return
 		}
 
-		go func(item domain.Item) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			event := domain.AuditEvent{
-				EventID:   uuid.New().String(),
-				ItemID:    item.ID,
-				Action:    "updated",
-				Timestamp: time.Now().UTC(),
-			}
-			eventJSON, _ := json.Marshal(event)
-			_, _ = stream.Append(ctx, "audit-events", map[string]interface{}{
-				"event": string(eventJSON),
-			})
-		}(updatedItem)
+		auditEmitter.EmitAsync(domain.AuditEvent{
+			EventID:   uuid.New().String(),
+			ItemID:    updatedItem.ID,
+			Action:    "updated",
+			Timestamp: time.Now().UTC(),
+		})
 
 		writeJSON(w, http.StatusOK, envelope{"item": updatedItem})
 	}

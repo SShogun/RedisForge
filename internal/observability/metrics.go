@@ -47,6 +47,25 @@ var (
 		},
 	)
 
+	// AuditEventsEmitted counts producer-side audit append attempts by action and result.
+	AuditEventsEmitted = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "audit_events_emitted_total",
+			Help: "Total producer-side audit event append attempts by action and status",
+		},
+		[]string{"action", "status"},
+	)
+
+	// AuditEmitLatency measures producer-side audit serialization + XADD latency.
+	AuditEmitLatency = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "audit_emit_latency_ms",
+			Help:    "Latency of producer-side audit event emission in milliseconds",
+			Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000},
+		},
+		[]string{"action", "status"},
+	)
+
 	// StreamProcessingLatency measures end-to-end audit event processing time.
 	StreamProcessingLatency = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -123,6 +142,17 @@ func RecordCacheHit() {
 // RecordCacheMiss increments the cache miss counter.
 func RecordCacheMiss() {
 	CacheMisses.Inc()
+}
+
+// RecordAuditEmit records producer-side audit event emission latency and result.
+func RecordAuditEmit(start time.Time, action string, err error) {
+	elapsed := time.Since(start).Milliseconds()
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	AuditEventsEmitted.WithLabelValues(action, status).Inc()
+	AuditEmitLatency.WithLabelValues(action, status).Observe(float64(elapsed))
 }
 
 // RecordStreamProcessing records event processing latency and status.

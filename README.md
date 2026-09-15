@@ -28,6 +28,7 @@ If Redis feels messy, this repo is meant to be the place you reopen and revise f
 | Project tour | [docs/README.md](docs/README.md) |
 | How the service is wired | [docs/implementation/architecture.md](docs/implementation/architecture.md) |
 | Redis module choices | [docs/implementation/redis-patterns.md](docs/implementation/redis-patterns.md) |
+| Failure and delivery semantics | [docs/failure-semantics.md](docs/failure-semantics.md) |
 | Phase-by-phase build history | [docs/REDISFORGE_BUILD_GUIDE.md](docs/REDISFORGE_BUILD_GUIDE.md) |
 | Redis configuration tradeoffs | [docs/redis-decisions.md](docs/redis-decisions.md) |
 | Profiling and tuning | [docs/profiling-results.md](docs/profiling-results.md) |
@@ -50,7 +51,8 @@ graph TD
     
     subgraph Redis Modules
         Handlers -- "Idempotency Check" --> RedisBloom[(RedisBloom)]
-        Handlers -- "Emit Audit Event" --> Streams[(Redis Streams)]
+        Handlers -- "Best-effort Audit Event" --> AuditEmitter[Audit Emitter]
+        AuditEmitter -- "XADD" --> Streams[(Redis Streams)]
         Handlers -- "Search Query" --> RediSearch[(RediSearch)]
         RediSearch -. "Indexes" .-> RedisJSON
     end
@@ -58,7 +60,8 @@ graph TD
     Streams --> Worker[Background Audit Worker]
     
     subgraph Observability
-        API -.-> Metrics["/healthz and /metrics"]
+        AuditEmitter -.-> Metrics["/healthz and /metrics"]
+        API -.-> Metrics
         API -.-> OTel[OpenTelemetry Tracing]
     end
 ```
@@ -72,7 +75,7 @@ The important design choice: the domain stays tiny so Redis remains the main thi
 | RedisJSON | Store Item documents and support partial updates |
 | RedisBloom | Idempotency pre-checks with no false negatives |
 | RediSearch | Full-text search, category filters, tag filters, score ranges |
-| Streams | Audit-event processing with consumer groups and at-least-once stale-message recovery after append |
+| Streams | Best-effort producer audit events plus at-least-once stale-message recovery after successful append |
 | Pub/Sub | Ephemeral real-time notifications |
 | Sentinel | High-availability topology support |
 | Cluster client | Horizontal-scale topology support and hash-tag discipline |
@@ -85,6 +88,7 @@ redisforge/
 |-- cmd/redisforge/              # application entrypoint
 |-- internal/
 |   |-- app/                     # dependency wiring and lifecycle
+|   |-- audit/                   # audit producer, timeout, logging, metrics
 |   |-- config/                  # typed environment configuration
 |   |-- domain/                  # Item model and sentinel errors
 |   |-- handlers/                # HTTP handlers for CRUD and search
@@ -102,6 +106,7 @@ redisforge/
 |-- docs/
 |   |-- implementation/          # architecture and Redis pattern notes
 |   |-- README.md                # docs index and learning path
+|   |-- failure-semantics.md     # explicit degraded-mode and delivery guarantees
 |   |-- REDISFORGE_BUILD_GUIDE.md
 |   |-- redis-decisions.md
 |   |-- profiling-results.md
@@ -173,11 +178,11 @@ make down
 | --- | --- | --- |
 | GET | `/healthz` | Health check |
 | GET | `/metrics` | Prometheus metrics |
-| POST | `/v1/items` | Create an item and emit an audit event |
+| POST | `/v1/items` | Create an item and schedule a best-effort `created` audit event |
 | GET | `/v1/items` | List items |
 | GET | `/v1/items/{id}` | Fetch one item through cache-aside lookup |
-| PUT | `/v1/items/{id}` | Update item and refresh Redis state |
-| DELETE | `/v1/items/{id}` | Delete item |
+| PUT | `/v1/items/{id}` | Update an item and schedule a best-effort `updated` audit event |
+| DELETE | `/v1/items/{id}` | Delete an item and schedule a best-effort `deleted` audit event |
 | GET | `/v1/items/search?q=...` | Search through RediSearch |
 
 ## Tests
@@ -186,7 +191,7 @@ make down
 .\make.ps1 test
 ```
 
-The tests use `testcontainers-go` where Redis behavior matters. Handler integration tests run against a pinned Redis Stack image, while Streams recovery tests run against a pinned Redis image and prove group bootstrap replay, cursor-complete stale claiming, and ACK-failure handling.
+The tests use `testcontainers-go` where Redis behavior matters. Handler integration tests run against a pinned Redis Stack image, while Streams recovery tests run against a pinned Redis image and prove group bootstrap replay, cursor-complete stale claiming, and ACK-failure handling. Producer tests also prove create/update/delete action emission and synchronous append error propagation.
 
 ## Development Rhythm
 
@@ -215,11 +220,12 @@ RedisForge currently implements the planned learning phases from bootstrap throu
 - Redis client abstraction for single-node, Sentinel, and Cluster modes
 - RedisJSON, RedisBloom, RediSearch, Streams, and Pub/Sub wrappers
 - Cache-aside repository pattern
+- Best-effort audit producer for create/update/delete with structured failure logs and Prometheus metrics
 - Audit stream worker with at-least-once recovery for successfully appended events
 - Prometheus metrics and OpenTelemetry hooks
 - Integration tests and benchmark/demo scripts
 
-The item handlers currently emit audit events asynchronously on a best-effort basis. A failed `XADD` does not roll back the item write. See [Redis configuration decisions](docs/redis-decisions.md) for the exact delivery and recovery contract.
+The item handlers intentionally return independently of audit `XADD`. A failed producer append does not roll back the item write, but it is now visible through logs plus `audit_events_emitted_total{action,status}` and `audit_emit_latency_ms{action,status}`. Once an event is successfully appended, worker recovery is at least once and duplicates remain possible. See [Failure Semantics](docs/failure-semantics.md) for the exact contract.
 
 ## Repository Goal
 

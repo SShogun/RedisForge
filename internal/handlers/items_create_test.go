@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/SShogun/redisforge/internal/audit"
 	"github.com/SShogun/redisforge/internal/handlers"
 	"github.com/SShogun/redisforge/internal/redisx"
 	"github.com/SShogun/redisforge/internal/repo"
@@ -24,9 +27,10 @@ func TestHandleCreateItem_Idempotency(t *testing.T) {
 	}
 
 	stream := redisx.NewStreamClient(client)
+	auditEmitter := audit.NewEmitter(stream, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	inMemoryRepo := repo.NewMemoryItemRepo()
 
-	handler := handlers.HandleCreateItem(inMemoryRepo, stream, bloom)
+	handler := handlers.HandleCreateItem(inMemoryRepo, auditEmitter, bloom)
 
 	payload := map[string]interface{}{
 		"name":            "Idempotency Test Widget",

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SShogun/redisforge/internal/audit"
 	"github.com/SShogun/redisforge/internal/config"
 	"github.com/SShogun/redisforge/internal/handlers"
 	"github.com/SShogun/redisforge/internal/logging"
@@ -59,6 +60,7 @@ func Run() error {
 	streamStore := redisx.NewStreamClient(redisClient)
 	pubSubStore := redisx.NewPubSubClient(redisClient)
 	_ = pubSubStore // used in handlers optionally
+	auditEmitter := audit.NewEmitter(streamStore, logger)
 
 	// Initialise bloom filter (idempotent)
 	if err := bloomStore.Reserve(ctx, 0.001, 1_000_000); err != nil {
@@ -104,12 +106,12 @@ func Run() error {
 	r.Handle("/metrics", promhttp.Handler())
 
 	r.Route("/v1/items", func(r chi.Router) {
-		r.Post("/", handlers.HandleCreateItem(cacheRepo, streamStore, bloomStore))
+		r.Post("/", handlers.HandleCreateItem(cacheRepo, auditEmitter, bloomStore))
 		r.Get("/search", handlers.HandleSearchItems(searchStore))
 		r.Get("/", handlers.HandleListItems(cacheRepo))
 		r.Get("/{id}", handlers.HandleGetItem(cacheRepo))
-		r.Put("/{id}", handlers.HandleUpdateItem(cacheRepo, streamStore))
-		r.Delete("/{id}", handlers.HandleDeleteItem(cacheRepo))
+		r.Put("/{id}", handlers.HandleUpdateItem(cacheRepo, auditEmitter))
+		r.Delete("/{id}", handlers.HandleDeleteItem(cacheRepo, auditEmitter))
 	})
 
 	// ── HTTP Server ────────────────────────────────────────────────
