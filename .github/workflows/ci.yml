@@ -37,5 +37,8 @@ jobs:
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
+      - name: Smoke-test Redis hot-path benchmarks
+        run: go test -count=1 ./internal/redisx -run '^$' -bench '^BenchmarkRedisHotPaths$' -benchtime=1x -benchmem
+
       - name: Build
         run: go build ./cmd/redisforge

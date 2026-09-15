@@ -16,8 +16,8 @@ This folder is the RedisForge learning path. Use it when you want to revise Redi
 4. [Redis Decisions](redis-decisions.md)
    Deeper notes on configuration choices, recovery guarantees, and tradeoffs.
 
-5. [Profiling Results](profiling-results.md)
-   Performance and tuning workspace for SLOWLOG, LATENCY, MEMORY, and benchmarks.
+5. [Profiling Results](profiling-results.md) and [Hot-Path Benchmarks](hotpath-benchmarks.md)
+   Use the profiling report for the historical load-test snapshot and the benchmark guide for the current reproducible Redis hot-path harness.
 
 6. [Demo Workflow](demo_workflow.md)
    A short repeatable flow for recording demos and proving the project works.
@@ -35,6 +35,7 @@ This folder is the RedisForge learning path. Use it when you want to revise Redi
 | "I forgot how Redis Streams consumer groups work." | [implementation/redis-patterns.md](implementation/redis-patterns.md) + [redis-decisions.md](redis-decisions.md) |
 | "I want to understand the codebase fast." | [implementation/architecture.md](implementation/architecture.md) |
 | "I want to know why these Redis settings exist." | [redis-decisions.md](redis-decisions.md) |
+| "I want to benchmark Redis hot paths reproducibly." | [hotpath-benchmarks.md](hotpath-benchmarks.md) |
 | "I want to record a demo for GitHub/LinkedIn/X." | [demo_workflow.md](demo_workflow.md) and [social_templates.md](social_templates.md) |
 | "I want to keep making real commits." | [project-journal.md](project-journal.md) |
 | "I am preparing for Redis/backend interviews." | [interview_questions.md](interview_questions.md) and [redisforge_interview_answers.md](redisforge_interview_answers.md) |
@@ -46,12 +47,13 @@ Every meaningful feature should leave behind three things: **code**, a **test**,
 
 | Feature | Code | Test | Doc Note |
 | --- | --- | --- | --- |
-| RedisJSON (CRUD + partial updates) | `redisx/json.go` | `redisx/json_test.go` | `redis-patterns.md` ✅ |
-| RedisBloom (idempotency) | `redisx/bloom.go` | `redisx/bloom_test.go` + `handlers/items_create_test.go` | `redis-patterns.md` ✅ |
-| RediSearch (full-text + faceted) | `redisx/search.go` | ⚠️ needs dedicated test | `redis-patterns.md` ✅ |
+| RedisJSON (CRUD + partial updates) | `redisx/json.go` | `redisx/json_test.go` ✅ | `redis-patterns.md` ✅ |
+| RedisBloom (idempotency) | `redisx/bloom.go` | `redisx/bloom_test.go` + `handlers/items_create_test.go` ✅ | `redis-patterns.md` ✅ |
+| RediSearch (full-text + faceted) | `redisx/search.go` | `redisx/search_test.go` ✅ | `redis-patterns.md` ✅ |
 | Redis Streams (audit log + stale recovery) | `redisx/streams.go` + `workers/audit_workers.go` | `workers/audit_workers_test.go` ✅ | `redis-decisions.md` ✅ |
 | Pub/Sub (ephemeral notifications) | `redisx/pubsub.go` | ⚠️ needs dedicated test | `redis-patterns.md` ✅ |
 | Cache-Aside Repository | `repo/item_cache.go` | `repo/item_cache_test.go` (4 tests + 4 benchmarks) | `redis-patterns.md` ✅ |
+| Redis hot paths | JSON/Bloom/Search/Streams wrappers | `redisx/hotpaths_benchmark_test.go` + CI smoke ✅ | `hotpath-benchmarks.md` ✅ |
 | Sentinel HA | `redisx/client.go` | Manual via `redis-sentinel/` compose | `redis-decisions.md` ✅ |
 | Cluster (horizontal scale) | `redisx/client.go` | Manual via `redis-cluster/` compose | `redis-cluster/README.md` ✅ |
 | Prometheus Metrics | `observability/metrics.go` | Verified via `/metrics` endpoint | `profiling-results.md` ✅ |
