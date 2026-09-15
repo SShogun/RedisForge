@@ -1,7 +1,8 @@
 package app
 
 // app.go owns the lifecycle of every subsystem:
-//   Open → Start workers → Serve HTTP → Shutdown sequence.
+//
+//	Open → Start workers → Serve HTTP → Shutdown sequence.
 //
 // Dependency injection: Currently manual (~100 lines) for clarity and visibility.
 // At production scale (50+ components), consider google/wire to auto-generate this:
@@ -74,8 +75,12 @@ func Run() error {
 	cacheRepo := repo.NewCacheItemRepo(memRepo, jsonStore, logger)
 
 	// ── Workers ────────────────────────────────────────────────────
-	hostname, _ := os.Hostname()
-	auditWorker := workers.NewAuditWorker(streamStore, logger, hostname)
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "redisforge"
+	}
+	consumerName := fmt.Sprintf("%s-%d", hostname, os.Getpid())
+	auditWorker := workers.NewAuditWorker(streamStore, logger, consumerName)
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
 	if err := auditWorker.Start(workerCtx); err != nil {

@@ -18,14 +18,10 @@ type StreamClient struct {
 }
 
 func NewStreamClient(client redis.UniversalClient) *StreamClient {
-	return &StreamClient{
-		client: client,
-	}
+	return &StreamClient{client: client}
 }
 
-// append a message to stream with approx length trimming
-// fields is a flat key-value slice: []interface{}{"event", "created", "id", "123"}
-
+// Append adds a message to a stream with approximate length trimming.
 func (s *StreamClient) Append(ctx context.Context, stream string, fields map[string]interface{}) (string, error) {
 	id, err := s.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: stream,
@@ -39,11 +35,10 @@ func (s *StreamClient) Append(ctx context.Context, stream string, fields map[str
 	return id, nil
 }
 
-// EnsureGroup created a consumer group if it doesnt exist
-// $ used to start from new messages
-
+// EnsureGroup creates a consumer group if it does not exist.
+// The group starts at 0 so existing entries are replayed instead of silently skipped.
 func (s *StreamClient) EnsureGroup(ctx context.Context, stream, group string) error {
-	err := s.client.XGroupCreateMkStream(ctx, stream, group, "$").Err()
+	err := s.client.XGroupCreateMkStream(ctx, stream, group, "0").Err()
 	if err != nil && err.Error() == "BUSYGROUP Consumer Group name already exists" {
 		return nil
 	}
@@ -53,7 +48,7 @@ func (s *StreamClient) EnsureGroup(ctx context.Context, stream, group string) er
 	return nil
 }
 
-// wrapper around redis.XMessage with a helper
+// Message wraps redis.XMessage with ACK metadata.
 type Message struct {
 	xm     redis.XMessage
 	stream string
@@ -70,10 +65,17 @@ func (m Message) Values() map[string]interface{} {
 }
 
 func (m Message) Ack(ctx context.Context) error {
-	return m.client.XAck(ctx, m.stream, m.group, m.xm.ID).Err()
+	acked, err := m.client.XAck(ctx, m.stream, m.group, m.xm.ID).Result()
+	if err != nil {
+		return fmt.Errorf("Message.Ack: %w", err)
+	}
+	if acked != 1 {
+		return fmt.Errorf("Message.Ack: expected 1 acknowledged entry, got %d", acked)
+	}
+	return nil
 }
 
-// ReadGroup reads the new messages uptil a limit for a consumer
+// ReadGroup reads new messages for a consumer up to count.
 func (s *StreamClient) ReadGroup(
 	ctx context.Context,
 	stream, group, consumer string,
@@ -96,8 +98,8 @@ func (s *StreamClient) ReadGroup(
 	}
 
 	var msgs []Message
-	for _, s2 := range streams {
-		for _, xm := range s2.Messages {
+	for _, streamResult := range streams {
+		for _, xm := range streamResult.Messages {
 			msgs = append(msgs, Message{
 				xm:     xm,
 				stream: stream,
@@ -109,30 +111,41 @@ func (s *StreamClient) ReadGroup(
 	return msgs, nil
 }
 
-// ClaimStale uses XAUTOCLAIM to steal pending entries idle for > 30s
-// This handles dead consumers that crashed without ACKing.
-// Returns the claimed messages and the next cursor (for pagination).
+// ClaimStale uses XAUTOCLAIM to transfer pending entries that have been idle
+// longer than pendingIdleThresh. startID must be the cursor returned by the
+// previous call; use "0-0" to begin a scan. Redis returns "0-0" when the scan
+// has reached the end of the pending-entry list.
 func (s *StreamClient) ClaimStale(
 	ctx context.Context,
-	stream, group, consumer string,
+	stream, group, consumer, startID string,
 	count int64,
 ) ([]Message, string, error) {
+	if startID == "" {
+		startID = "0-0"
+	}
+	if count <= 0 {
+		return nil, "", fmt.Errorf("StreamClient.ClaimStale: count must be positive")
+	}
+
 	xmsgs, nextStartID, err := s.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
 		Stream:   stream,
 		Group:    group,
 		Consumer: consumer,
 		MinIdle:  pendingIdleThresh,
-		Start:    "0",
+		Start:    startID,
 		Count:    count,
 	}).Result()
 	if err != nil {
 		return nil, "", fmt.Errorf("StreamClient.ClaimStale: %w", err)
 	}
 
-	var msgs []Message
+	msgs := make([]Message, 0, len(xmsgs))
 	for _, xm := range xmsgs {
 		msgs = append(msgs, Message{
-			xm: xm, stream: stream, group: group, client: s.client,
+			xm:     xm,
+			stream: stream,
+			group:  group,
+			client: s.client,
 		})
 	}
 	return msgs, nextStartID, nil

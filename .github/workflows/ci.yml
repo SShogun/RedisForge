@@ -2,19 +2,18 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
   pull_request:
     branches:
-      - main
+      - master
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Go tests
+    name: Go verification
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -23,11 +22,20 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.x"
+          go-version-file: go.mod
           cache: true
 
       - name: Download modules
         run: go mod download
 
-      - name: Run tests
-        run: go test -race ./...
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+
+      - name: Build
+        run: go build ./cmd/redisforge

@@ -14,7 +14,7 @@ This folder is the RedisForge learning path. Use it when you want to revise Redi
    Historical phase-by-phase record of how the project was built.
 
 4. [Redis Decisions](redis-decisions.md)
-   Deeper notes on configuration choices and tradeoffs.
+   Deeper notes on configuration choices, recovery guarantees, and tradeoffs.
 
 5. [Profiling Results](profiling-results.md)
    Performance and tuning workspace for SLOWLOG, LATENCY, MEMORY, and benchmarks.
@@ -32,7 +32,7 @@ This folder is the RedisForge learning path. Use it when you want to revise Redi
 
 | Intent | Read |
 | --- | --- |
-| "I forgot how Redis Streams consumer groups work." | [implementation/redis-patterns.md](implementation/redis-patterns.md) |
+| "I forgot how Redis Streams consumer groups work." | [implementation/redis-patterns.md](implementation/redis-patterns.md) + [redis-decisions.md](redis-decisions.md) |
 | "I want to understand the codebase fast." | [implementation/architecture.md](implementation/architecture.md) |
 | "I want to know why these Redis settings exist." | [redis-decisions.md](redis-decisions.md) |
 | "I want to record a demo for GitHub/LinkedIn/X." | [demo_workflow.md](demo_workflow.md) and [social_templates.md](social_templates.md) |
@@ -49,7 +49,7 @@ Every meaningful feature should leave behind three things: **code**, a **test**,
 | RedisJSON (CRUD + partial updates) | `redisx/json.go` | `redisx/json_test.go` | `redis-patterns.md` ✅ |
 | RedisBloom (idempotency) | `redisx/bloom.go` | `redisx/bloom_test.go` + `handlers/items_create_test.go` | `redis-patterns.md` ✅ |
 | RediSearch (full-text + faceted) | `redisx/search.go` | ⚠️ needs dedicated test | `redis-patterns.md` ✅ |
-| Redis Streams (audit log) | `redisx/streams.go` + `workers/audit_workers.go` | ⚠️ needs dedicated test | `redis-patterns.md` ✅ |
+| Redis Streams (audit log + stale recovery) | `redisx/streams.go` + `workers/audit_workers.go` | `workers/audit_workers_test.go` ✅ | `redis-decisions.md` ✅ |
 | Pub/Sub (ephemeral notifications) | `redisx/pubsub.go` | ⚠️ needs dedicated test | `redis-patterns.md` ✅ |
 | Cache-Aside Repository | `repo/item_cache.go` | `repo/item_cache_test.go` (4 tests + 4 benchmarks) | `redis-patterns.md` ✅ |
 | Sentinel HA | `redisx/client.go` | Manual via `redis-sentinel/` compose | `redis-decisions.md` ✅ |
@@ -70,4 +70,3 @@ Every meaningful feature should leave behind three things:
 - A doc note explaining why the Redis choice was made.
 
 This keeps RedisForge useful for both the maintainer and future visitors.
-

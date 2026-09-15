@@ -138,57 +138,98 @@ Special characters in tag values must be escaped in queries:
 
 ## Redis Streams Configuration
 
-### Decision: MAXLEN ~100,000, Idle Threshold 30s
+### Decision: MAXLEN ~100,000, Idle Threshold 30s, At-Least-Once Consumption
 
-**Problem:** Audit events must survive process restarts and be processed exactly-once.
-Redis Streams provide durable, ordered, consumer-group semantics. Configuration
-balances durability with memory cost.
+**Problem:** Once an audit event has been appended to Redis, it should survive worker
+restarts and remain recoverable when a consumer crashes before acknowledging it.
+Redis Streams provide durable, ordered, consumer-group semantics, but they do not
+provide exactly-once execution.
 
-**Configuration (from internal/redisx/streams.go):**
+**Configuration (from `internal/redisx/streams.go`):**
 ```go
 const (
-    streamMaxLen      = 100_000      // approximate trimming
+    streamMaxLen      = 100_000
     pendingIdleThresh = 30 * time.Second
 )
 ```
 
-### Design Decisions
+### Delivery Contract
+
+- **Producer → Redis is currently best effort.** Item create/update handlers append audit
+  events asynchronously. A failed `XADD` does not roll back the HTTP write, so an event can
+  be missing if Redis is unavailable during emission.
+- **Once appended, worker delivery is at least once.** `XREADGROUP` places delivered entries
+  in the group's Pending Entries List (PEL). The worker ACKs only after processing.
+- **Duplicates are possible.** If processing succeeds and the process dies before `XACK`,
+  the entry remains pending and can be delivered again after recovery. Any future side
+  effect added to the worker must therefore be idempotent.
+- **Malformed entries are acknowledged and dropped.** RedisForge does not yet implement a
+  durable dead-letter stream. If that policy changes, the DLQ write and original ACK need
+  an explicit atomicity/failure design.
+
+### Recovery Design
 
 **MAXLEN ~100,000 with approximate trimming:**
-- Every `XADD` call trims the stream to ~100k entries.
-- The `~` prefix means "approximate" — Redis only trims when a full radix tree node
-  can be freed, making trimming much cheaper than exact truncation on every write.
-- Trade-off: The stream may exceed 100k briefly. Acceptable because:
-  - Each event is ~500 bytes (Item + metadata).
-  - 100k events ≈ 50 MB — small relative to audit log durability needs.
-  - Events older than 100k are rarely replayed.
+- Every `XADD` call trims the stream to approximately 100k entries.
+- Approximate trimming is cheaper than exact truncation on every write.
+- The stream may temporarily exceed 100k entries.
+
+**Consumer group starts at `0`:**
+- Creating a missing group replays entries that already exist in the stream instead of
+  silently starting after them.
+- Existing groups keep their current last-delivered ID; `EnsureGroup` is idempotent.
 
 **Idle threshold = 30s:**
-- If a consumer crashes without ACKing an entry, the entry stays "pending" in the
-  consumer group.
-- Every 5s, the claim loop uses `XAUTOCLAIM` to steal entries idle > 30s.
-- If 30s > 0s: guarantees dead consumers don't block the audit log forever.
-- If 30s too short: healthy slow consumers get their work stolen.
+- If a consumer crashes without ACKing an entry, the entry remains pending.
+- Every 5s, the claim loop uses `XAUTOCLAIM` to transfer entries idle for more than 30s.
+- If the threshold is too short, healthy but slow consumers can have work stolen.
 
-### How to Verify
+**`XAUTOCLAIM` cursor is fully consumed:**
+- Redis scans only a bounded portion of the PEL for each call and returns a cursor for the
+  next scan.
+- RedisForge continues with that cursor until Redis returns `0-0`; otherwise stale entries
+  behind a large set of fresh pending entries can be skipped indefinitely.
+
+**ACK errors are failures:**
+- A processed message is not considered successfully completed if `XACK` fails.
+- Invalid messages are only considered dropped after their ACK succeeds; an ACK failure
+  leaves them pending so recovery can retry later.
+
+### Automated Recovery Proof
+
+`internal/workers/audit_workers_test.go` uses Testcontainers with a real Redis instance to
+prove three recovery invariants:
+
+1. entries that existed before group creation are replayed;
+2. cursor pagination reaches stale entries hidden behind a larger fresh PEL prefix;
+3. ACK failures are returned instead of being reported as successful processing.
+
+Run the proof with:
 
 ```bash
-# Check stream size and approximate entries
+go test -race -count=1 ./internal/workers
+```
+
+### How to Verify Manually
+
+```bash
+# Check stream size
 redis-cli XLEN audit-events
 
-# Check pending entries and claim window
+# Check total pending entries
 redis-cli XPENDING audit-events audit-processors
 
-# Manual audit: what's the oldest entry?
+# Inspect the oldest stream entry
 redis-cli XRANGE audit-events - + COUNT 1
 ```
 
 ### Tuning for ILA
 
-- **If audit events are lost too quickly**: Increase MAXLEN (but watch memory).
-- **If dead consumers block the log**: Decrease pendingIdleThresh to 10s.
-- **If CPU load spikes every 5s**: The claim loop is running — increase claimInterval.
-- Profile with `SLOWLOG`: XADD and XREADGROUP should be < 1ms at normal throughput.
+- **If audit events are trimmed too quickly**: Increase MAXLEN, then re-measure memory.
+- **If dead consumers recover too slowly**: Decrease `pendingIdleThresh` only after measuring
+  normal processing latency so healthy consumers are not preempted.
+- **If claim scans are expensive**: Tune batch size/claim interval and observe pending depth.
+- Profile `XADD`, `XREADGROUP`, `XAUTOCLAIM`, and `XACK` with SLOWLOG before making latency claims.
 
 ---
 
@@ -324,7 +365,7 @@ The `audit-events` stream was the biggest key found, with 1804 entries. The bloo
 These decisions are empirically driven:
 - Bloom filter capacity balances accuracy with memory (see math above).
 - RediSearch schema prioritizes the use cases in Phase RF-11 handlers.
-- Streams MAXLEN is sized for typical audit log retention (100k events).
+- Streams MAXLEN is sized for typical audit log retention (100k events), with at-least-once consumer recovery after append.
 - Sentinel vs Cluster choice depends on your data growth trajectory.
 
 When you port RedisForge patterns into ILA, revisit these choices against ILA's
