@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -14,26 +15,35 @@ import (
 )
 
 const (
-	auditStream   = "audit-events"
-	auditGroup    = "audit-processors"
-	batchSize     = 10
-	blockDuration = 2 * time.Second
-	claimInterval = 5 * time.Second
+	auditStream          = "audit-events"
+	auditGroup           = "audit-processors"
+	defaultBatchSize     = 10
+	defaultBlockDuration = 2 * time.Second
+	defaultClaimInterval = 5 * time.Second
 )
 
 // AuditWorker processes audit events from the Redis Stream.
 type AuditWorker struct {
-	stream       *redisx.StreamClient
-	logger       *slog.Logger
-	consumerName string // unique per process
-	wg           sync.WaitGroup
+	stream        *redisx.StreamClient
+	logger        *slog.Logger
+	consumerName  string
+	batchSize     int64
+	blockDuration time.Duration
+	claimInterval time.Duration
+	wg            sync.WaitGroup
 }
 
 func NewAuditWorker(stream *redisx.StreamClient, logger *slog.Logger, consumerName string) *AuditWorker {
-	return &AuditWorker{stream: stream, logger: logger, consumerName: consumerName}
+	return &AuditWorker{
+		stream:        stream,
+		logger:        logger,
+		consumerName:  consumerName,
+		batchSize:     defaultBatchSize,
+		blockDuration: defaultBlockDuration,
+		claimInterval: defaultClaimInterval,
+	}
 }
 
-// consume loop is
 func (w *AuditWorker) Start(ctx context.Context) error {
 	setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -57,94 +67,133 @@ func (w *AuditWorker) consumeLoop(ctx context.Context) {
 		default:
 		}
 
-		msgs, err := w.stream.ReadGroup(ctx, auditStream, auditGroup, w.consumerName, batchSize, blockDuration)
+		msgs, err := w.stream.ReadGroup(ctx, auditStream, auditGroup, w.consumerName, w.batchSize, w.blockDuration)
 		if err != nil {
 			if ctx.Err() != nil {
-				return // shutting down
+				return
 			}
 			w.logger.Error("audit_worker: ReadGroup error", "err", err)
-			time.Sleep(1 * time.Second)
+			if !waitForRetry(ctx, time.Second) {
+				return
+			}
 			continue
 		}
 
 		for _, msg := range msgs {
-			w.process(ctx, msg)
+			_ = w.process(ctx, msg)
 		}
 	}
 }
 
 func (w *AuditWorker) claimLoop(ctx context.Context) {
 	defer w.wg.Done()
-	ticker := time.NewTicker(claimInterval)
+	ticker := time.NewTicker(w.claimInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			stale, _, err := w.stream.ClaimStale(ctx, auditStream, auditGroup,
-				w.consumerName, batchSize)
+			reclaimed, err := w.reclaimPending(ctx)
 			if err != nil {
-				w.logger.Warn("audit_worker: ClaimStale error", "err", err)
-			} else {
-				for _, msg := range stale {
-					w.logger.Info("audit_worker: reclaimed stale message", "id", msg.ID())
-					w.process(ctx, msg)
+				if ctx.Err() != nil {
+					return
 				}
+				w.logger.Warn("audit_worker: reclaim pending failed", "err", err)
+			} else if reclaimed > 0 {
+				w.logger.Info("audit_worker: reclaimed stale messages", "count", reclaimed)
 			}
 
-			// Update pending count metric
 			pending, err := w.stream.GetPendingCount(ctx, auditStream, auditGroup)
 			if err == nil {
 				observability.SetStreamPendingCount(auditStream, auditGroup, float64(pending))
-			} else {
+			} else if ctx.Err() == nil {
 				w.logger.Warn("audit_worker: failed to get pending count", "err", err)
 			}
 		}
 	}
 }
 
-func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) {
+// reclaimPending walks the entire XAUTOCLAIM cursor so stale messages cannot
+// be stranded behind newer pending entries that are not eligible for claiming.
+func (w *AuditWorker) reclaimPending(ctx context.Context) (int, error) {
+	cursor := "0-0"
+	reclaimed := 0
+
+	for {
+		msgs, nextCursor, err := w.stream.ClaimStale(
+			ctx,
+			auditStream,
+			auditGroup,
+			w.consumerName,
+			cursor,
+			w.batchSize,
+		)
+		if err != nil {
+			return reclaimed, err
+		}
+
+		for _, msg := range msgs {
+			w.logger.Info("audit_worker: reclaimed stale message", "id", msg.ID())
+			if err := w.process(ctx, msg); err != nil && ctx.Err() != nil {
+				return reclaimed, ctx.Err()
+			}
+			reclaimed++
+		}
+
+		if nextCursor == "0-0" {
+			return reclaimed, nil
+		}
+		if nextCursor == cursor {
+			return reclaimed, fmt.Errorf("audit_worker: XAUTOCLAIM cursor did not advance from %s", cursor)
+		}
+		cursor = nextCursor
+	}
+}
+
+func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) (resultErr error) {
 	start := time.Now()
-	var processErr error
 	action := "unknown"
+	var metricErr error
 
 	defer func() {
-		// Only record if we didn't just skip due to context cancellation
-		if processErr != context.Canceled {
-			observability.RecordStreamProcessing(start, processErr, action)
+		if !errors.Is(metricErr, context.Canceled) {
+			observability.RecordStreamProcessing(start, metricErr, action)
 		}
 	}()
 
-	// Context propagation: check if context is already cancelled before processing
-	// This ensures graceful shutdown when the caller signals context.Done()
-	select {
-	case <-ctx.Done():
+	if err := ctx.Err(); err != nil {
 		w.logger.Info("audit_worker: context cancelled, skipping process", "id", msg.ID())
-		processErr = context.Canceled
-		return // Don't ACK yet; let it be reclaimed
-	default:
+		metricErr = err
+		return err
 	}
 
 	raw, ok := msg.Values()["event"].(string)
 	if !ok {
+		metricErr = fmt.Errorf("audit_worker: missing event field")
 		w.logger.Warn("audit_worker: missing event field", "id", msg.ID())
-		// need to ACK otherwise process will requeue forever
-		_ = msg.Ack(ctx)
-		processErr = fmt.Errorf("missing event field")
-		return
+		if ackErr := msg.Ack(ctx); ackErr != nil {
+			w.logger.Error("audit_worker: ACK failed for malformed message", "id", msg.ID(), "err", ackErr)
+			metricErr = errors.Join(metricErr, ackErr)
+			return ackErr
+		}
+		return nil
 	}
 
 	var event domain.AuditEvent
 	if err := json.Unmarshal([]byte(raw), &event); err != nil {
+		metricErr = fmt.Errorf("audit_worker: unmarshal event: %w", err)
 		w.logger.Error("audit_worker: unmarshal failed", "id", msg.ID(), "err", err)
-		_ = msg.Ack(ctx) // dead-letter
-		processErr = err
-		return
+		if ackErr := msg.Ack(ctx); ackErr != nil {
+			w.logger.Error("audit_worker: ACK failed for malformed message", "id", msg.ID(), "err", ackErr)
+			metricErr = errors.Join(metricErr, ackErr)
+			return ackErr
+		}
+		return nil
 	}
 	action = event.Action
 
-	// just log
 	w.logger.Info("audit_worker: processed event",
 		"event_id", event.EventID,
 		"item_id", event.ItemID,
@@ -152,10 +201,27 @@ func (w *AuditWorker) process(ctx context.Context, msg redisx.Message) {
 	)
 
 	if err := msg.Ack(ctx); err != nil {
+		resultErr = fmt.Errorf("audit_worker: ACK processed message %s: %w", msg.ID(), err)
+		metricErr = resultErr
 		w.logger.Error("audit_worker: ACK failed", "id", msg.ID(), "err", err)
+		return resultErr
 	}
+
+	return nil
 }
 
 func (w *AuditWorker) Stop() {
 	w.wg.Wait()
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

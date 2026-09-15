@@ -21,7 +21,7 @@ func startRedisStack(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:        "redis/redis-stack:latest",
+		Image:        "redis/redis-stack-server:7.4.0-v8",
 		ExposedPorts: []string{"6379/tcp"},
 		WaitingFor:   wait.ForLog("Ready to accept connections").WithStartupTimeout(30 * time.Second),
 	}
@@ -30,9 +30,20 @@ func startRedisStack(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("start redis-stack: %v", err)
 	}
-	t.Cleanup(func() { c.Terminate(ctx) })
-	host, _ := c.Host(ctx)
-	port, _ := c.MappedPort(ctx, "6379")
+	t.Cleanup(func() {
+		if err := c.Terminate(context.Background()); err != nil {
+			t.Logf("terminate redis-stack: %v", err)
+		}
+	})
+
+	host, err := c.Host(ctx)
+	if err != nil {
+		t.Fatalf("redis-stack host: %v", err)
+	}
+	port, err := c.MappedPort(ctx, "6379/tcp")
+	if err != nil {
+		t.Fatalf("redis-stack port: %v", err)
+	}
 	return host + ":" + port.Port()
 }
 
@@ -43,7 +54,6 @@ func TestHandleCreateItem_Idempotency(t *testing.T) {
 
 	ctx := context.Background()
 	bloom := redisx.NewBloomFilter(client, "bf:idempotency_test")
-	// Initialize bloom filter
 	if err := bloom.Reserve(ctx, 0.001, 1000); err != nil {
 		t.Fatalf("bloom.Reserve failed: %v", err)
 	}

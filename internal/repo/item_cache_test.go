@@ -160,7 +160,7 @@ func TestCacheItemRepo_Create_WritesThrough(t *testing.T) {
 	}
 }
 
-// Benchmarks: Cache hit vs miss performance
+// Benchmarks: Cache hit vs miss performance.
 
 // BenchmarkCacheItemRepo_GetByID_CacheHit measures performance when item is in cache.
 // This is the fast path: immediate return without fallback store access.
@@ -180,33 +180,35 @@ func BenchmarkCacheItemRepo_GetByID_CacheHit(b *testing.B) {
 	}
 	repo := NewCacheItemRepo(fallback, cache, testLogger())
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = repo.GetByID(ctx, item.ID)
 	}
 }
 
-// BenchmarkCacheItemRepo_GetByID_CacheMiss measures performance on cache miss.
-// This requires fallback store lookup, which is slower than cache hit.
+// BenchmarkCacheItemRepo_GetByID_CacheMiss measures a forced cache miss that
+// reaches the fallback store and attempts a cache backfill on every iteration.
 func BenchmarkCacheItemRepo_GetByID_CacheMiss(b *testing.B) {
 	ctx := context.Background()
 	item := domain.Item{ID: "bench-miss", Name: "Fallback", Category: "perf", Score: 8.8}
 
-	// Seed fallback store but leave cache empty
 	fallback := NewMemoryItemRepo()
 	_, _ = fallback.Create(ctx, item)
 
 	cache := &fakeCache{getErr: domain.ErrNotFound}
 	repo := NewCacheItemRepo(fallback, cache, testLogger())
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = repo.GetByID(ctx, item.ID)
 	}
 }
 
-// BenchmarkCacheItemRepo_GetByID_BackfillPath measures cache miss with backfill.
-// This includes fallback lookup + cache write, the most expensive single path.
+// BenchmarkCacheItemRepo_GetByID_BackfillPath measures a genuine cold-cache
+// lookup on every iteration. Cache state is reset while the timer is stopped so
+// every measured GetByID performs fallback lookup plus cache population.
 func BenchmarkCacheItemRepo_GetByID_BackfillPath(b *testing.B) {
 	ctx := context.Background()
 	item := domain.Item{ID: "bench-backfill", Name: "ToCache", Category: "perf", Score: 7.7}
@@ -217,8 +219,12 @@ func BenchmarkCacheItemRepo_GetByID_BackfillPath(b *testing.B) {
 	cache := &fakeCache{}
 	repo := NewCacheItemRepo(fallback, cache, testLogger())
 
-	b.ResetTimer()
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		cache.items = make(map[string]domain.Item)
+		b.StartTimer()
+
 		_, _ = repo.GetByID(ctx, item.ID)
 	}
 }
@@ -240,6 +246,7 @@ func BenchmarkCacheItemRepo_GetByID_Contention(b *testing.B) {
 	}
 	repo := NewCacheItemRepo(fallback, cache, testLogger())
 
+	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _ = repo.GetByID(ctx, item.ID)

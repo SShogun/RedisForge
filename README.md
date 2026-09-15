@@ -72,7 +72,7 @@ The important design choice: the domain stays tiny so Redis remains the main thi
 | RedisJSON | Store Item documents and support partial updates |
 | RedisBloom | Idempotency pre-checks with no false negatives |
 | RediSearch | Full-text search, category filters, tag filters, score ranges |
-| Streams | Durable audit log with consumer groups and stale-message claiming |
+| Streams | Audit-event processing with consumer groups and at-least-once stale-message recovery after append |
 | Pub/Sub | Ephemeral real-time notifications |
 | Sentinel | High-availability topology support |
 | Cluster client | Horizontal-scale topology support and hash-tag discipline |
@@ -186,7 +186,7 @@ make down
 .\make.ps1 test
 ```
 
-The tests use `testcontainers-go` where Redis behavior matters, so the Redis wrappers are validated against real Redis Stack instead of mocks.
+The tests use `testcontainers-go` where Redis behavior matters. Handler integration tests run against a pinned Redis Stack image, while Streams recovery tests run against a pinned Redis image and prove group bootstrap replay, cursor-complete stale claiming, and ACK-failure handling.
 
 ## Development Rhythm
 
@@ -215,9 +215,11 @@ RedisForge currently implements the planned learning phases from bootstrap throu
 - Redis client abstraction for single-node, Sentinel, and Cluster modes
 - RedisJSON, RedisBloom, RediSearch, Streams, and Pub/Sub wrappers
 - Cache-aside repository pattern
-- Audit stream worker
+- Audit stream worker with at-least-once recovery for successfully appended events
 - Prometheus metrics and OpenTelemetry hooks
 - Integration tests and benchmark/demo scripts
+
+The item handlers currently emit audit events asynchronously on a best-effort basis. A failed `XADD` does not roll back the item write. See [Redis configuration decisions](docs/redis-decisions.md) for the exact delivery and recovery contract.
 
 ## Repository Goal
 
