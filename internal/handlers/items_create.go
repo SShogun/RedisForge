@@ -1,12 +1,11 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/SShogun/redisforge/internal/audit"
 	"github.com/SShogun/redisforge/internal/domain"
 	"github.com/SShogun/redisforge/internal/redisx"
 	"github.com/SShogun/redisforge/internal/repo"
@@ -17,7 +16,7 @@ import (
 // Idempotency pre-check: BloomFilter → if "might exist", skip to duplicate check.
 func HandleCreateItem(
 	items repo.ItemRepo,
-	stream *redisx.StreamClient,
+	auditEmitter *audit.Emitter,
 	bloom *redisx.BloomFilter,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -67,22 +66,12 @@ func HandleCreateItem(
 			_ = bloom.Add(r.Context(), input.IdempotencyKey)
 		}
 
-		// Emit audit event to stream (async, non-blocking path)
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			event := domain.AuditEvent{
-				EventID:   uuid.New().String(),
-				ItemID:    created.ID,
-				Action:    "created",
-				Timestamp: time.Now().UTC(),
-			}
-			eventJSON, _ := json.Marshal(event)
-			_, _ = stream.Append(ctx, "audit-events", map[string]interface{}{
-				"event": string(eventJSON),
-			})
-		}()
+		auditEmitter.EmitAsync(domain.AuditEvent{
+			EventID:   uuid.New().String(),
+			ItemID:    created.ID,
+			Action:    "created",
+			Timestamp: time.Now().UTC(),
+		})
 
 		writeJSON(w, http.StatusCreated, envelope{"item": created})
 	}
