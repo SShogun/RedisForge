@@ -44,7 +44,7 @@ means item writes may be succeeding without corresponding audit entries.
 
 ### After the event reaches Redis
 
-Once `XADD` succeeds, the worker contract is **at least once**, not exactly once.
+For entries retained in the stream, worker delivery and stale-pending recovery are **at least once**, not exactly once. Appends use approximate `MAXLEN ~ 100000`, so older entries—including entries not yet processed—can be trimmed; a successful `XADD` is not indefinite retention.
 
 - The consumer reads new group entries with `XREADGROUP`.
 - Delivered but unacknowledged entries remain in the Pending Entries List (PEL).

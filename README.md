@@ -75,7 +75,7 @@ The important design choice: the domain stays tiny so Redis remains the main thi
 | RedisJSON | Store Item documents and support partial updates |
 | RedisBloom | Idempotency pre-checks with no false negatives |
 | RediSearch | Full-text search, category filters, tag filters, score ranges |
-| Streams | Best-effort producer audit events plus at-least-once stale-message recovery after successful append |
+| Streams | Best-effort audit producer; at-least-once recovery for entries retained in the approximately 100,000-entry stream |
 | Pub/Sub | Ephemeral real-time notifications |
 | Sentinel | High-availability topology support |
 | Cluster client | Horizontal-scale topology support and hash-tag discipline |
@@ -221,11 +221,11 @@ RedisForge currently implements the planned learning phases from bootstrap throu
 - RedisJSON, RedisBloom, RediSearch, Streams, and Pub/Sub wrappers
 - Cache-aside repository pattern
 - Best-effort audit producer for create/update/delete with structured failure logs and Prometheus metrics
-- Audit stream worker with at-least-once recovery for successfully appended events
+- Audit stream worker with at-least-once recovery for appended events while retained in its approximately 100,000-entry bounded stream
 - Prometheus metrics and OpenTelemetry hooks
 - Integration tests and benchmark/demo scripts
 
-The item handlers intentionally return independently of audit `XADD`. A failed producer append does not roll back the item write, but it is now visible through logs plus `audit_events_emitted_total{action,status}` and `audit_emit_latency_ms{action,status}`. Once an event is successfully appended, worker recovery is at least once and duplicates remain possible. See [Failure Semantics](docs/failure-semantics.md) for the exact contract.
+The item handlers intentionally return independently of audit `XADD`. A failed producer append does not roll back the item write, but it is visible through logs plus `audit_events_emitted_total{action,status}` and `audit_emit_latency_ms{action,status}`. After append, the worker can recover pending events at least once while their entries remain in the approximately 100,000-entry bounded stream; duplicates remain possible. The worker currently logs and ACKs events rather than persisting them to an external audit sink. See [Failure Semantics](docs/failure-semantics.md) for the exact contract.
 
 ## Repository Goal
 
