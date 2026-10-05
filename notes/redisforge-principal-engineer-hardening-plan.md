@@ -1,119 +1,961 @@
-# RedisForge Hardening Plan: From Redis Demo to Principal-Level Portfolio Project
+# RedisForge Hardening Plan: Agent-Executable Milestones
 
-**Purpose.** This is a proposed implementation plan, not a claim that RedisForge is production-ready. The goal is one coherent, production-shaped service whose data, event, cache, and failure guarantees are explicit and demonstrated. Prefer correctness and evidence over adding more infrastructure.
+**Purpose.** Turn RedisForge from a strong Redis learning/demo repository into a production-shaped portfolio service by improving one bounded, reviewable unit at a time.
 
-## Current baseline (repository evidence)
+This file is the **execution queue**. The architectural baseline and non-negotiable constraints live in [architecture-limitations.md](architecture-limitations.md). An automated agent must read both files before changing code.
 
-- `internal/app/app.go` wires HTTP handlers to `CacheItemRepo` with a newly constructed `MemoryItemRepo` fallback. Item state in that map is lost when the process exits; RedisJSON is used as a cache.
-- `internal/repo/item_cache.go` writes through on create, falls back on cache miss, and invalidates on update/delete. `internal/redisx/search.go` indexes RedisJSON keys; an update can therefore remove an item from search until a read repopulates the cache.
-- Create uses RedisBloom as an idempotency pre-check. A positive is rejected, lookup errors fail open, and add failures are ignored. This is not a durable idempotency record.
-- Audit emission is asynchronous and best effort. The stream uses approximate `MAXLEN ~ 100000`; the worker currently logs and ACKs events. It does not write to a durable audit sink.
-- `/healthz` returns OK without checking dependencies. `app.Run` logs an HTTP server error from its goroutine but can continue waiting for a shutdown signal.
-- CI already runs formatting, `go vet`, race tests, a Redis hot-path benchmark smoke test, and a build. Compose files use `latest` tags for key images.
-
-These are useful teaching choices, but they should not be presented as durable production guarantees.
-
-## Recommended target architecture
-
-For a portfolio project that demonstrates service engineering, make **PostgreSQL the item system of record** and keep Redis central as the cache, search projection, and event-delivery technology:
+The target remains intentionally focused:
 
 ```text
 HTTP request
-  -> Postgres transaction: item + idempotency receipt + outbox event
+  -> PostgreSQL transaction
+       -> item mutation
+       -> durable idempotency receipt when applicable
+       -> outbox event
   -> response
-Outbox relay -> Redis Stream (bounded delivery buffer)
-Stream consumers -> idempotent effects + per-consumer receipts -> ACK
-Outbox/projector -> versioned RedisJSON search projection -> RediSearch
-GET -> Postgres on cache miss; RedisJSON remains an optimization
+
+Outbox relay -> Redis Stream
+  -> audit consumer -> durable audit effect + receipt -> ACK
+  -> search projector -> version-checked RedisJSON projection -> receipt -> ACK
+
+GET -> Redis cache when valid -> PostgreSQL on miss
+Search -> RediSearch over versioned RedisJSON projection
 ```
 
-The existing `ItemRepo` boundary makes a Postgres implementation a natural extension. Keep `MemoryItemRepo` for unit tests or an explicitly labelled demo mode. Do not dual-write the item to memory and Postgres and call that highly available.
+Redis remains central to the project, but it is no longer asked to pretend that an in-memory fallback is durable state.
 
-If the project must stay Redis-only, choose the other coherent design: make RedisJSON authoritative, define Redis persistence/restore and failover guarantees, and remove the in-memory fallback from the production path. Do not maintain two competing sources of truth.
+---
 
-## Implementation plan
+## Execution policy
 
-### 0. Define the contract and decision record
+### One daily unit
 
-Before adding dependencies, write short ADRs for: source of truth; idempotency semantics; audit delivery/retention; search consistency; and Redis topology/version. Define what happens for DB down, Redis down, duplicate keys, stale versions, slow consumers, malformed events, and shutdown.
+A scheduled agent run may **implement at most one task ID** from this file.
 
-**Deliverables:** a guarantee table in the README/docs and a target architecture diagram. State explicitly that delivery is at least once, not exactly once; set retention and consistency expectations rather than implying permanence or immediate consistency.
+The agent should:
 
-**Gate:** every user-visible guarantee has an owner, a failure behavior, and a test or operational signal.
+1. Read [architecture-limitations.md](architecture-limitations.md) and this file.
+2. Inspect the current `master` branch and recent history.
+3. Starting from the first task in queue order, evaluate whether its acceptance criteria are already satisfied by the current repository.
+4. Skip already-satisfied tasks, recording the evidence used.
+5. Select the first incomplete task whose dependencies are satisfied.
+6. Implement only that task.
+7. Run targeted verification, then the applicable repository verification baseline.
+8. Create a local commit only when there is no known failing verification.
+9. Stop and produce the required report.
 
-### 1. Durable items and real idempotency
+The agent must **not** continue into the next task during the same scheduled run, even if the selected task finishes quickly.
 
-1. Add a Postgres-backed `ItemRepo`, migrations, connection/pool configuration, and readiness checks. Treat memory mode as test/demo only. Because current item data is process-local, migration of live data is not required; document that the old demo data is disposable.
-2. In one DB transaction, write the item, its version/timestamps, an idempotency receipt, and the corresponding outbox event. Use database uniqueness/transactions—not a Bloom result—as the correctness boundary.
-3. Store a request hash and the original response/status for each idempotency key. A retry with the same key and same request returns the original result; reuse with a different request returns a documented conflict. Define key scope and retention now; if authentication/tenancy is later added, scope keys by caller/tenant.
-4. Keep Bloom only as an optional optimization/learning example. A Bloom positive must be confirmed against durable state; a Bloom outage or stale filter must not create duplicate items or reject a valid new key.
+### Branch naming
 
-**Prove:** concurrent identical requests create one item and return a stable result; changed payload under the same key conflicts; restart does not erase the receipt; DB rollback leaves neither item nor outbox event.
+Use:
 
-### 2. Reliable outbox relay and meaningful stream worker
+```text
+agentzero/redisforge/<task-id-lowercase>-YYYYMMDD
+```
 
-1. Add a bounded outbox dispatcher that claims rows in small batches, retries transient errors with bounded backoff, and publishes a stable `event_id`. Track delivery receipts per consumer; publication is not completion. Preserve per-item order by serializing an aggregate or gating version N+1 on N. Full-snapshot events may apply only a newer version; deltas require sequential versions and gap repair. Do not claim global ordering unless implemented.
-2. Expect the relay to publish and crash before recording success, so duplicates can occur. Each consumer must make its effect idempotent. The audit consumer writes the audit row and its unique `(consumer,event_id)` receipt in one DB transaction, then ACKs. For the Redis search projector, apply a version-checked idempotent update first, then record its receipt; replay after a crash is safe, and rebuild/reconciliation repairs the cross-store gap.
-3. Add bounded retry/attempt state and a dead-letter policy for poison messages. Persist or successfully publish the dead-letter record before ACKing/dropping the original. Keep malformed-event policy explicit and observable.
-4. Revisit `MAXLEN ~ 100000`. A cap can trim payloads while consumer-group references remain, so a pending ID does not by itself guarantee recoverable event data. Keep outbox rows until every required consumer has a durable receipt and the documented retention window passes. A bounded sweeper republishes published-but-unprocessed events; stable event IDs make this safe. Alternatively, use a pinned Redis version and a retention policy proven to protect the required work. Alert on oldest unprocessed age and backlog before retention is threatened.
-5. Version event envelopes (`schema_version`), bound payload size, include correlation/request IDs and item version, and avoid secrets/needless personal data.
+Example:
 
-The [transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html) addresses the database-plus-message dual-write gap; duplicates still require idempotent consumers. Redis documents stream trimming and consumer-group reference behavior in the [XADD reference](https://redis.io/docs/latest/commands/xadd/).
+```text
+agentzero/redisforge/rf-m1-p02-20261008
+```
 
-**Prove:** inject crashes after DB commit, after `XADD`, after each consumer effect but before its receipt/ACK, and after ACK. Test stream trimming before consumption and per-item ordering. Show no lost committed events, safe duplicates, bounded retries, and replay through the chosen retention window.
+Base the branch on the current reviewed `master`. Do not stack a new daily task on an unreviewed prior Agent Zero branch.
 
-### 3. Make cache and search projections consistent
+### Local commit policy
 
-Separate the GET cache from the searchable projection (for example, distinct Redis key prefixes). Apply committed item changes from the outbox using monotonic item versions, so an old event cannot overwrite a newer projection. Track a receipt per projection consumer; Redis updates must be replay-safe if the process crashes before the receipt commits. Represent deletes with versioned tombstones or an equivalent safe delete flow.
+Default behavior:
 
-Define search as eventually consistent with a measured/declared projection-lag target, or choose a stronger synchronous contract and accept its write availability trade-off. Add a bounded reindex/rebuild command from Postgres and a reconciliation metric for missing/stale projections. Keep Redis failure behavior explicit: cache failure may degrade latency; search can return an actionable dependency error if no fallback scan is intended.
+- create a **local commit** after implementation and verification;
+- never push;
+- never merge;
+- never force-update a branch;
+- never create a release or deployment.
 
-**Prove:** create/update/delete appear correctly in search; replaying an old event cannot revert newer data; rebuilding the index restores it; cache failure does not corrupt authoritative data.
+If targeted verification fails because of the implementation, do **not** create the commit. Leave the branch/worktree for inspection and report the failure.
 
-### 4. Harden HTTP contracts and process lifecycle
+If a CI-equivalent check cannot run solely because of a documented local environment limitation (for example Docker unavailable), the agent may still create the local commit if all runnable targeted checks pass, but it must mark that check `UNVERIFIED`. Remote CI remains the merge gate.
 
-- Surface listener/bind failure as a process startup failure instead of only logging it from a goroutine.
-- Split liveness from readiness. Liveness should mean the process can run; readiness should reflect the dependencies required for the advertised service. Keep Redis optional for CRUD only if the implementation really degrades without it; search has different requirements.
-- Define shutdown order and deadlines: stop accepting requests, finish in-flight DB transactions, stop the outbox relay, drain/stop workers, flush telemetry, then close DB/Redis. Prefer the durable outbox over untracked `EmitAsync` goroutines.
-- Bound request bodies; reject trailing JSON; validate score, tags, and string sizes. Decide whether partial update is `PATCH` or whether `PUT` becomes full replacement. Expose optimistic concurrency with ETag/`If-Match` (or a clearly documented version field) rather than relying only on an internal read/update race.
-- If deployed beyond local development, add authentication/authorization and rate limits before exposing item data. Keep credentials out of logs and metrics.
+### Definition of complete
 
-**Prove:** port conflict exits nonzero; readiness changes with required dependencies; shutdown leaves no untracked work; oversized/invalid/trailing-body requests fail consistently; stale `If-Match` gets the documented conflict response.
+A task is complete only when:
 
-### 5. Add operational signals and reproducible environments
+- its acceptance criteria are demonstrably satisfied;
+- directly relevant tests exist and pass;
+- no known regression remains;
+- changed behavior is documented where necessary;
+- applicable verification is green or explicitly `UNVERIFIED` only for environment limitations;
+- the final report contains exact evidence.
 
-- Pin Redis Stack, Postgres, Prometheus, and Grafana versions (or image digests); remove `latest` from reproducibility-critical paths. Add Compose health checks and wait for required services to become healthy. See [Compose startup ordering](https://docs.docker.com/compose/how-tos/startup-order/).
-- Make tracing export configurable: stdout for local use, OTLP for a collector-backed demo. Add HTTP spans and meaningful service attributes; avoid always-on full sampling as the only mode. OpenTelemetry's [Go exporter guidance](https://opentelemetry.io/docs/languages/go/exporters/) recommends a Collector in production environments.
-- Add bounded-cardinality metrics for request latency/errors, DB pool pressure, cache outcome, outbox oldest age/backlog, stream lag/pending/claim outcomes, dead-letter count, and search projection lag. Never label metrics with item IDs, raw query text, or idempotency keys.
-- Define SLOs from an explicit workload and deployment envelope. Do not paste invented latency/throughput goals into the README.
+"Code was written" is not completion.
 
-**Prove:** a clean checkout starts the stack deterministically; readiness gates startup; a dashboard and alert/runbook explain what an operator should do when the outbox or stream backlog grows.
+---
 
-### 6. Turn verification into the portfolio evidence
+# Milestone RF-M0 — Contracts and Safe Process Behavior
 
-Extend the existing CI rather than replacing it. Pin the test service images and run migrations plus integration tests in CI. Add deterministic tests for repository contracts, transaction rollback, concurrent idempotency, stream recovery/retention, projection rebuild, and shutdown. Add fuzz targets for JSON/query parsing and validation; Go supports coverage-guided fuzzing in the standard toolchain ([Go fuzzing](https://go.dev/doc/security/fuzz/)).
+Goal: remove ambiguity before introducing a durable store. This milestone establishes explicit guarantees and fixes lifecycle/API behavior that should not depend on PostgreSQL.
 
-Use the existing benchmark harness as a reproducible experiment: document hardware/runtime/image versions, data cardinality, warm/cold cache, request mix, concurrency, and command. Measure throughput, p50/p95/p99 latency, errors, CPU/memory, Redis memory, and projection/outbox lag. Compare baseline and change; publish raw output or a script. Do not report synthetic runs as production measurements.
+## RF-M0-P01 — Guarantee matrix and ADR baseline
 
-**Final evidence package:** architecture + ADRs, guarantee/failure matrix, integration and failure-injection results, benchmark methodology/results, dashboard screenshot, and a short create → retry → update/search → kill worker → recover demo. Update README claims only after the evidence exists.
+**Dependencies:** none
 
-## Suggested order and stop gates
+**Scope**
 
-1. ADRs/contracts and server-startup error handling.
-2. Durable system of record, idempotency receipt, migrations, and transactional outbox.
-3. Idempotent consumer, retry/DLQ, and retention/replay proof.
-4. Search/cache projection consistency and rebuild.
-5. Readiness/shutdown, telemetry, pinned Compose, and runbooks.
-6. CI failure matrix, reproducible load test, README/demo.
+- Create or update concise ADR/decision documentation for:
+  - source of truth;
+  - idempotency semantics;
+  - audit delivery/retention;
+  - search consistency;
+  - Redis topology/module requirements.
+- Add a user-visible guarantee/failure matrix linked from the README or docs index.
+- Keep claims consistent with the current code; target-state guarantees must be clearly labelled as planned.
 
-Do not start a later phase while the prior phase's acceptance tests are red. Do not add Kafka, Kubernetes, or more Redis modules merely for resume keywords; add them only if a measured requirement justifies the operational cost.
+**Acceptance**
 
-## Resume-level completion bar
+- Every advertised guarantee names its owner, failure behavior, and evidence/test strategy.
+- Current behavior is not described as durable if it is not durable.
+- At-least-once is not described as exactly-once.
+- No invented latency/SLO number is introduced.
 
-A strong eventual claim would be: *“Designed and validated a durable Go service using Postgres transactions and Redis projections/Streams; implemented request idempotency and an outbox relay; demonstrated duplicate-safe recovery, bounded retention, readiness/shutdown behavior, and measured latency under a reproducible workload.”*
+**Verification**
 
-Use that wording only after the stated tests and measurements actually pass. The differentiator is the verified guarantee and trade-off reasoning, not the technology count.
+- Review affected Markdown links.
+- Search README/docs for contradictory claims about durability, audit permanence, search consistency, and idempotency.
+- Run repository code checks only if code/config changed.
 
-## Audit record
+## RF-M0-P02 — Propagate HTTP server startup/runtime failure
 
-Before the initial file write, the plan was reviewed in five improvement rounds of ten checks each: (1) repository grounding and scope, (2) data/event guarantees, (3) crash/retry/retention paths, (4) security/operations/migration, and (5) verification, benchmark quality, and resume claims. A follow-up semantic audit found that a single “published” flag did not fully express recovery across multiple consumers and stream trimming. The plan was refined to require per-consumer receipts, replayable outbox rows, and replay-safe search projection updates, then checked against another 50-point review matrix. Numeric SLOs and unmeasured performance claims remain intentionally excluded.
+**Dependencies:** RF-M0-P01
+
+**Scope**
+
+- Change application lifecycle wiring so listener/bind/start failure reaches the top-level runner.
+- Preserve graceful shutdown for normal termination.
+- Add focused tests for immediate server failure and normal cancellation/shutdown.
+
+**Acceptance**
+
+- A port/listener failure causes a nonzero application failure path rather than being logged and ignored.
+- Normal shutdown remains bounded and clean.
+- No unrelated server redesign.
+
+**Verification**
+
+```bash
+go test ./internal/app/... -count=1
+go vet ./...
+go test -race -count=1 ./...
+go build ./cmd/redisforge
+```
+
+## RF-M0-P03 — Harden JSON request boundaries
+
+**Dependencies:** RF-M0-P02
+
+**Scope**
+
+- Bound request body size.
+- Reject trailing JSON/tokens.
+- Make malformed JSON behavior deterministic.
+- Add/strengthen validation for existing Item fields without inventing new product semantics.
+
+**Acceptance**
+
+- Oversized bodies fail with the documented status.
+- Multiple JSON values/trailing tokens fail.
+- Existing valid payloads still work.
+- Tests cover boundary cases.
+
+**Verification**
+
+```bash
+go test ./internal/handlers/... -count=1
+go vet ./...
+go test -race -count=1 ./...
+go build ./cmd/redisforge
+```
+
+## RF-M0-P04 — Document update semantics before persistence migration
+
+**Dependencies:** RF-M0-P03
+
+**Scope**
+
+- Decide and document whether existing update behavior is full replacement or partial update.
+- Define the intended optimistic-concurrency contract using item version and HTTP `ETag`/`If-Match` or an explicitly justified equivalent.
+- Add tests only for behavior that already exists; implementation of durable concurrency may occur in RF-M1.
+
+**Acceptance**
+
+- API semantics are unambiguous before the Postgres repository is introduced.
+- The document identifies the exact conflict response expected once durable concurrency is implemented.
+
+**Verification**
+
+- Documentation/link review.
+- No broad code change is required for this task.
+
+---
+
+# Milestone RF-M1 — Durable Items, Idempotency, and Transactional Outbox
+
+Goal: make PostgreSQL the authoritative item store and establish one transactional correctness boundary.
+
+## RF-M1-P01 — Add PostgreSQL runtime and migration foundation
+
+**Dependencies:** RF-M0 complete
+
+**Scope**
+
+- Add a PostgreSQL driver/pool appropriate for the project.
+- Add typed DB configuration.
+- Add migrations for the initial durable schema:
+  - items;
+  - idempotency receipts;
+  - outbox events.
+- Add Postgres to local Compose with a pinned version and health check.
+- Do not wire handlers to Postgres yet.
+
+**Acceptance**
+
+- Clean environment can start Postgres deterministically.
+- Migrations apply from empty state and are repeatable according to the chosen migration tool.
+- Secrets/credentials have safe local defaults and are not logged.
+
+**Verification**
+
+- Migration-specific tests/commands.
+- `go mod tidy` because dependencies change.
+- `go vet ./...`
+- `go test -race -count=1 ./...`
+- `go build ./cmd/redisforge`
+
+## RF-M1-P02 — Implement PostgreSQL ItemRepo CRUD
+
+**Dependencies:** RF-M1-P01
+
+**Scope**
+
+- Implement the existing `ItemRepo` contract using PostgreSQL.
+- Make version/timestamp ownership explicit in the durable layer.
+- Add repository contract/integration tests for create/get/list/update/delete.
+- Do not change handler semantics beyond what the repository boundary requires.
+
+**Acceptance**
+
+- Item state survives process/repository reconstruction.
+- CRUD semantics match the documented contract.
+- Update/delete not-found behavior is deterministic.
+- Integration tests use real PostgreSQL.
+
+**Verification**
+
+```bash
+go test ./internal/repo/... -count=1
+go vet ./...
+go test -race -count=1 ./...
+go build ./cmd/redisforge
+```
+
+## RF-M1-P03 — Wire Postgres as production source of truth
+
+**Dependencies:** RF-M1-P02
+
+**Scope**
+
+- Production application wiring uses Postgres-backed `ItemRepo`.
+- `MemoryItemRepo` remains available only for tests or explicit demo/unit usage.
+- Remove any production-path implication that RedisJSON or memory is authoritative.
+- GET cache miss must resolve from durable state.
+
+**Acceptance**
+
+- Restarting the app does not erase authoritative item data.
+- GET/List agree after restart.
+- Cache failure does not corrupt durable state.
+- Existing Redis learning features remain available where appropriate.
+
+**Verification**
+
+- App/repository integration tests.
+- Restart-oriented integration test if practical.
+- CI-equivalent verification.
+
+## RF-M1-P04 — Implement durable idempotency receipts
+
+**Dependencies:** RF-M1-P03
+
+**Scope**
+
+- Store idempotency key scope, request hash, original status/result reference, and retention metadata.
+- Define same-key/same-request replay behavior.
+- Define same-key/different-request conflict behavior.
+- Bloom may remain only as an optimization; it cannot be the correctness boundary.
+
+**Acceptance**
+
+- Same key + same request can return a stable prior result.
+- Same key + different request returns the documented conflict.
+- Receipt survives restart.
+- Bloom outage/false positive cannot incorrectly decide correctness.
+
+**Verification**
+
+- Focused idempotency repository/service tests.
+- Restart test.
+- CI-equivalent verification.
+
+## RF-M1-P05 — Make create + receipt + outbox one transaction
+
+**Dependencies:** RF-M1-P04
+
+**Scope**
+
+- For create requests, atomically write:
+  - item;
+  - idempotency receipt when supplied;
+  - outbox event with stable `event_id`, aggregate/item ID, item version, schema version, correlation/request ID where available.
+- Eliminate best-effort asynchronous audit emission from the create correctness path.
+
+**Acceptance**
+
+- Transaction rollback leaves no partial item/receipt/outbox state.
+- Successful commit always has the corresponding outbox row.
+- Duplicate request concurrency creates one logical item/result.
+- No direct DB + Redis dual write is introduced.
+
+**Verification**
+
+- Transaction rollback test.
+- Concurrent identical-request test.
+- Same-key/different-payload test.
+- CI-equivalent verification.
+
+## RF-M1-P06 — Extend transactional outbox to update/delete and durable concurrency
+
+**Dependencies:** RF-M1-P05
+
+**Scope**
+
+- Update/delete create outbox events in the same item transaction.
+- Implement the previously documented optimistic-concurrency contract.
+- Ensure item versions advance monotonically.
+- Define delete version/tombstone information needed by projections.
+
+**Acceptance**
+
+- Stale update/delete is rejected deterministically.
+- Successful mutation and outbox event are atomic.
+- Failed mutation produces no outbox event.
+- Tests prove version monotonicity and stale-write conflict.
+
+**Verification**
+
+- Handler + repository integration tests.
+- Concurrency tests.
+- CI-equivalent verification.
+
+**RF-M1 gate:** production CRUD is durable, idempotency correctness is transactional, and every committed mutation has a durable outbox event.
+
+---
+
+# Milestone RF-M2 — Reliable Outbox Relay and Idempotent Consumers
+
+Goal: make event delivery recoverable and duplicate-safe without claiming exactly-once behavior.
+
+## RF-M2-P01 — Add bounded outbox relay
+
+**Dependencies:** RF-M1 complete
+
+**Scope**
+
+- Claim outbox rows in bounded batches.
+- Publish stable event envelopes to Redis Streams.
+- Use bounded retry/backoff.
+- Preserve enough state to recover after process restart.
+- Do not mark consumer completion at publication time.
+
+**Acceptance**
+
+- Relay does not lose a committed outbox row because Redis is temporarily unavailable.
+- Batch size/backoff are bounded/configurable.
+- Stable `event_id` is preserved on retry.
+
+**Verification**
+
+- Relay unit/integration tests including Redis unavailable then recovery.
+- CI-equivalent verification.
+
+## RF-M2-P02 — Prove publish/crash duplicate safety
+
+**Dependencies:** RF-M2-P01
+
+**Scope**
+
+- Handle the crash window after successful `XADD` but before publisher state is recorded.
+- Add failure injection around publication bookkeeping.
+- Keep duplicates legal and observable.
+
+**Acceptance**
+
+- The same outbox event can be republished after crash without corrupting downstream state.
+- Tests demonstrate the duplicate window instead of hiding it.
+- Documentation states at-least-once delivery.
+
+**Verification**
+
+- Failure-injection integration tests.
+- CI-equivalent verification.
+
+## RF-M2-P03 — Persist audit effect and per-consumer receipt
+
+**Dependencies:** RF-M2-P02
+
+**Scope**
+
+- Replace log-only audit consumption with a durable audit record/effect.
+- Store a unique per-consumer `event_id` receipt in the same DB transaction as the audit effect.
+- ACK only after the durable transaction succeeds.
+
+**Acceptance**
+
+- Re-delivery does not duplicate the durable audit effect.
+- Crash after effect/receipt but before ACK is safe.
+- ACK failure leaves a recoverable message.
+
+**Verification**
+
+- Duplicate-delivery test.
+- Crash-before-ACK test.
+- Existing stream recovery tests remain green.
+- CI-equivalent verification.
+
+## RF-M2-P04 — Add bounded retry and dead-letter policy
+
+**Dependencies:** RF-M2-P03
+
+**Scope**
+
+- Track attempts/retry state for poison/malformed events.
+- Define dead-letter persistence/publication.
+- Persist or successfully publish dead-letter evidence before dropping/ACKing the original.
+- Add bounded-cardinality metrics for retry/dead-letter outcomes.
+
+**Acceptance**
+
+- Poison event cannot loop forever without visibility.
+- Original event is not ACKed before dead-letter handling is durable enough for the documented contract.
+- Metrics/logs identify the failure category without high-cardinality IDs as labels.
+
+**Verification**
+
+- Malformed-event and repeated-failure tests.
+- Metrics tests where practical.
+- CI-equivalent verification.
+
+## RF-M2-P05 — Protect retention and replay window
+
+**Dependencies:** RF-M2-P04
+
+**Scope**
+
+- Revisit stream `MAXLEN` behavior.
+- Keep outbox rows long enough for every required consumer receipt plus the documented retention window.
+- Add bounded replay/sweeper behavior for published-but-unprocessed events.
+- Add oldest-unprocessed/backlog visibility.
+
+**Acceptance**
+
+- A trimmed stream payload alone cannot permanently lose a committed event while its durable replay window is still promised.
+- Sweeper/replay uses stable event IDs and remains duplicate-safe.
+- Retention assumptions are documented.
+
+**Verification**
+
+- Trim-before-consumption test.
+- Replay-after-trim test.
+- Slow-consumer/backlog test where practical.
+- CI-equivalent verification.
+
+## RF-M2-P06 — Full event failure matrix
+
+**Dependencies:** RF-M2-P05
+
+**Scope**
+
+Add explicit failure-injection coverage for:
+
+- crash after DB commit;
+- crash after `XADD`;
+- crash after consumer effect before receipt/ACK;
+- crash after receipt before ACK;
+- Redis outage and recovery;
+- stream trimming before first consumption;
+- stale pending claim/recovery;
+- malformed/poison event.
+
+**Acceptance**
+
+- Tests demonstrate no lost committed event inside the documented retention model.
+- Duplicates remain safe.
+- Ordering claims are limited to what is actually implemented.
+- The failure-semantics documentation matches test evidence.
+
+**Verification**
+
+- Dedicated failure-matrix test suite.
+- Full CI-equivalent verification.
+
+**RF-M2 gate:** committed outbox events remain recoverable through the documented window, consumers are idempotent, and failure behavior is tested rather than implied.
+
+---
+
+# Milestone RF-M3 — Versioned Cache and Search Projection
+
+Goal: make Redis cache/search behavior consistent with durable item state while keeping search explicitly eventually consistent.
+
+## RF-M3-P01 — Separate GET cache from search projection
+
+**Dependencies:** RF-M2 complete
+
+**Scope**
+
+- Use distinct Redis keyspaces/prefixes for read cache and search projection.
+- Remove the current coupling where cache invalidation can make search disappear.
+- Document ownership and TTL/retention of each keyspace.
+
+**Acceptance**
+
+- Updating/invalidating GET cache cannot remove the searchable projection by accident.
+- Existing search index definitions target the projection namespace.
+
+**Verification**
+
+- Redis integration tests.
+- CI-equivalent verification.
+
+## RF-M3-P02 — Add version-checked search projector
+
+**Dependencies:** RF-M3-P01
+
+**Scope**
+
+- Consume outbox/stream item events.
+- Apply create/update projection only when event version is newer than the stored projection version.
+- Record projection consumer receipt after a replay-safe Redis update.
+
+**Acceptance**
+
+- Duplicate event is harmless.
+- Older event cannot overwrite newer projection state.
+- Crash after Redis projection write but before receipt is safe on replay.
+
+**Verification**
+
+- Ordered, duplicate, out-of-order, and crash-window tests.
+- CI-equivalent verification.
+
+## RF-M3-P03 — Make delete projection replay-safe
+
+**Dependencies:** RF-M3-P02
+
+**Scope**
+
+- Implement versioned tombstone or equivalent delete protection.
+- Ensure an old create/update event cannot resurrect a newer delete.
+- Bound tombstone retention according to replay guarantees.
+
+**Acceptance**
+
+- Delete remains authoritative over older replayed events.
+- Newer legitimate recreate semantics, if supported, are explicit and version-safe.
+
+**Verification**
+
+- Delete/replay/out-of-order integration tests.
+- CI-equivalent verification.
+
+## RF-M3-P04 — Add bounded rebuild/reindex command
+
+**Dependencies:** RF-M3-P03
+
+**Scope**
+
+- Rebuild search projection from PostgreSQL in bounded pages/batches.
+- Make reruns safe.
+- Avoid loading all items into memory.
+- Document operational usage.
+
+**Acceptance**
+
+- Empty/corrupt/missing projection can be restored from durable data.
+- Re-running rebuild converges without duplicating/corrupting state.
+
+**Verification**
+
+- Rebuild integration test from intentionally damaged projection.
+- CI-equivalent verification.
+
+## RF-M3-P05 — Add projection reconciliation and explicit search failure semantics
+
+**Dependencies:** RF-M3-P04
+
+**Scope**
+
+- Add bounded reconciliation signal/metric for missing or stale projection data.
+- Define search behavior when Redis/Search is unavailable.
+- Measure/report projection lag without high-cardinality labels.
+
+**Acceptance**
+
+- Operators can detect stale/missing projection.
+- Search dependency failure returns a documented actionable error rather than silently pretending authoritative completeness.
+- CRUD remains correct because Postgres is authoritative.
+
+**Verification**
+
+- Redis unavailable tests for CRUD vs search.
+- Metric/reconciliation tests.
+- CI-equivalent verification.
+
+**RF-M3 gate:** cache is an optimization, search is a replayable versioned projection, and Redis failure cannot corrupt authoritative item state.
+
+---
+
+# Milestone RF-M4 — Readiness, Shutdown, Reproducibility, and Observability
+
+Goal: make the service operable and make failures diagnosable.
+
+## RF-M4-P01 — Split liveness and readiness
+
+**Dependencies:** RF-M3 complete
+
+**Scope**
+
+- Keep liveness about process viability.
+- Add readiness that probes dependencies required for the advertised service.
+- Reflect Postgres and Redis/Search requirements separately where semantics differ.
+
+**Acceptance**
+
+- Liveness does not flap solely because Redis is unavailable.
+- Readiness becomes false when a required dependency is unavailable.
+- Tests cover dependency transitions.
+
+**Verification**
+
+- Handler/app tests.
+- Integration test with dependency outage.
+- CI-equivalent verification.
+
+## RF-M4-P02 — Coordinate shutdown across HTTP, relay, workers, telemetry, and stores
+
+**Dependencies:** RF-M4-P01
+
+**Scope**
+
+Define and implement bounded shutdown order:
+
+1. stop accepting new requests;
+2. finish/cancel in-flight request work by deadline;
+3. stop outbox relay;
+4. drain/stop stream consumers;
+5. flush telemetry;
+6. close Redis/Postgres.
+
+**Acceptance**
+
+- No new untracked async audit goroutines remain.
+- Shutdown has explicit deadlines and returns errors when shutdown fails.
+- Tests prove bounded exit.
+
+**Verification**
+
+- Lifecycle tests including cancellation and stuck worker simulation.
+- `go test -race`.
+- CI-equivalent verification.
+
+## RF-M4-P03 — Pin reproducible service images and health-gated Compose startup
+
+**Dependencies:** RF-M4-P02
+
+**Scope**
+
+- Pin Redis Stack, Postgres, Prometheus, and Grafana versions/digests where appropriate.
+- Add Compose health checks.
+- Use dependency health ordering instead of arbitrary startup timing.
+- Document clean-checkout startup.
+
+**Acceptance**
+
+- No reproducibility-critical service uses `latest`.
+- Clean startup waits for required dependencies.
+- Existing demo workflows still work.
+
+**Verification**
+
+- `docker compose config`.
+- Clean `up`/health smoke test.
+- Existing integration tests.
+
+## RF-M4-P04 — Add production-shaped metrics and tracing configuration
+
+**Dependencies:** RF-M4-P03
+
+**Scope**
+
+Add/configure bounded-cardinality telemetry for:
+
+- request latency/errors;
+- DB pool pressure;
+- cache outcomes;
+- outbox backlog/oldest age;
+- stream lag/pending/claim outcomes;
+- dead-letter count;
+- search projection lag/reconciliation.
+
+Make tracing exporter/sampling configurable; keep stdout convenient locally and support OTLP/Collector usage.
+
+**Acceptance**
+
+- No item IDs, raw queries, idempotency keys, or other high-cardinality user data are metric labels.
+- Telemetry failures do not corrupt request correctness.
+- Service/resource attributes are meaningful.
+
+**Verification**
+
+- Unit tests for metric registration where applicable.
+- App startup smoke.
+- CI-equivalent verification.
+
+## RF-M4-P05 — Operator runbook and failure dashboards
+
+**Dependencies:** RF-M4-P04
+
+**Scope**
+
+- Update Grafana/dashboard assets for the new signals.
+- Add a concise runbook for:
+  - DB unavailable;
+  - Redis/Search unavailable;
+  - outbox backlog growth;
+  - stream consumer lag;
+  - dead-letter growth;
+  - projection lag/rebuild.
+- Avoid invented SLOs; derive thresholds only from measured baseline or clearly label placeholders.
+
+**Acceptance**
+
+- Each alert/signal tells an operator what to inspect next.
+- Runbook commands match the repository.
+- Dashboard panels use bounded-cardinality metrics.
+
+**Verification**
+
+- Config/provisioning validation where available.
+- Manual docs/dashboard review.
+
+**RF-M4 gate:** service startup/shutdown and degraded modes are explicit, environments are reproducible, and the important failure queues are visible.
+
+---
+
+# Milestone RF-M5 — Verification and Portfolio Evidence
+
+Goal: turn the implementation into evidence that can survive technical review.
+
+## RF-M5-P01 — Expand CI verification matrix
+
+**Dependencies:** RF-M4 complete
+
+**Scope**
+
+- Pin integration-test service images.
+- Ensure migrations run in CI.
+- Add/organize deterministic integration suites for:
+  - repository contracts;
+  - transactional rollback;
+  - concurrent idempotency;
+  - event recovery/retention;
+  - projection replay/rebuild;
+  - lifecycle/shutdown.
+- Add focused fuzz targets for parsing/validation boundaries where valuable.
+
+**Acceptance**
+
+- CI fails when a promised guarantee is broken.
+- Fuzz targets are bounded enough for CI smoke use.
+- Existing benchmark smoke remains meaningful.
+
+**Verification**
+
+- Run full CI-equivalent command set locally where possible.
+- Inspect workflow YAML for deterministic service setup.
+
+## RF-M5-P02 — Define reproducible benchmark methodology
+
+**Dependencies:** RF-M5-P01
+
+**Scope**
+
+Document and script:
+
+- hardware/runtime/image versions;
+- data cardinality;
+- warm/cold cache conditions;
+- request mix;
+- concurrency;
+- run duration/count;
+- exact command;
+- metrics captured: throughput, p50/p95/p99, errors, CPU/memory, Redis memory, outbox/projection lag.
+
+**Acceptance**
+
+- Another developer can reproduce the run.
+- No measured result is added yet unless actually executed and preserved.
+- Synthetic/local results are labelled accurately.
+
+**Verification**
+
+- Script dry run/help output.
+- Documentation review.
+
+## RF-M5-P03 — Record baseline and hardened benchmark evidence
+
+**Dependencies:** RF-M5-P02
+
+**Scope**
+
+- Run the documented workload.
+- Preserve raw output/artifacts or machine-readable summaries.
+- Compare relevant before/after behavior.
+- Explain regressions/trade-offs rather than cherry-picking a single metric.
+
+**Acceptance**
+
+- Results include environment and exact command.
+- No claim exceeds the measured evidence.
+- Reliability metrics are reported alongside latency/throughput when relevant.
+
+**Verification**
+
+- Re-run a sample to confirm the script/result pipeline.
+- Cross-check README numbers against raw evidence.
+
+## RF-M5-P04 — Final architecture, README, demo, and resume evidence package
+
+**Dependencies:** RF-M5-P03
+
+**Scope**
+
+Update final project-facing material:
+
+- architecture diagram;
+- ADR/guarantee matrix;
+- failure semantics;
+- project journal;
+- README claims;
+- create -> retry -> update/search -> kill worker -> recover demo;
+- benchmark methodology/results;
+- dashboard/runbook references.
+
+**Acceptance**
+
+- README describes what the code currently proves, not what the plan intended.
+- Demo exercises at least one failure/recovery path.
+- Resume-level wording is supported by passing tests and recorded evidence.
+
+A valid eventual claim, only after the evidence exists, is approximately:
+
+> Designed and validated a durable Go service using PostgreSQL transactions and Redis projections/Streams; implemented request idempotency and a transactional outbox relay; demonstrated duplicate-safe recovery, bounded retention, readiness/shutdown behavior, and measured latency under a reproducible workload.
+
+**Verification**
+
+- Fresh clone/read-through.
+- Link check/manual docs audit.
+- Full CI green on the final branch.
+
+**RF-M5 gate:** the project has evidence for its guarantees and measured claims, not merely an impressive dependency list.
+
+---
+
+# Daily Agent Zero report contract
+
+Every scheduled run must end with a report in this exact structure:
+
+```text
+REDISFORGE DAILY HARDENING REPORT
+
+Task:
+  <task id> — <title>
+
+Selection:
+  Base branch: master
+  Starting commit: <sha>
+  Branch: <local branch>
+  Why this task was selected: <dependency/queue evidence>
+  Earlier tasks skipped as already complete: <ids + evidence, or none>
+
+Result:
+  Status: READY FOR USER REVIEW | BLOCKED | FAILED
+  Behavior changed:
+    - ...
+  Files changed:
+    - ...
+
+Evidence:
+  Targeted tests:
+    <command> -> PASS/FAIL/UNVERIFIED
+  Repository checks:
+    <command> -> PASS/FAIL/UNVERIFIED
+  Environment limitations:
+    - ...
+
+Review first:
+  1. <highest-risk diff>
+  2. <next>
+  3. <next>
+
+Known risks / follow-up:
+  - ...
+
+Git:
+  Local commit created: yes/no
+  Commit SHA: <sha or n/a>
+  Commit message:
+    <type(scope): summary>
+
+Next queue item:
+  <next task id only if current task is complete>
+```
+
+Do not replace the evidence section with a generic statement such as "all tests pass."
+
+---
+
+# User review and merge gate
+
+After an Agent Zero run reports `READY FOR USER REVIEW`, the intended human flow is:
+
+```text
+inspect diff/local commit
+        |
+        v
+make any manual corrections
+        |
+        v
+push agent branch yourself
+        |
+        v
+GitHub CI
+   |          |
+ green      red
+   |          |
+ review     fix/re-run
+   v
+ merge
+   |
+   v
+next scheduled day may select the next queue item
+```
+
+Agent Zero must not treat a local commit as merged progress. The current `master` branch is the source of truth for whether the queue may advance.
